@@ -20,6 +20,7 @@ displacement with ``-wavelength / (4 pi)`` (positive = toward the satellite).
 
 Files written (``<work_dir>/mintpy``):
     inputs/geometryRadar.h5        latitude, longitude, height, angles, slant range
+                                   (+ waterMask, waterFraction with a water mask)
     inputs/ifgramStack.h5          unwrapPhase, coherence, connectComponent, bperp
     dolphinTemporalCoherence.h5    dolphin phase-linking temporal coherence
     timeseries.h5                  only for ``mintpy.inversion: dolphin``
@@ -34,6 +35,7 @@ from osgeo import gdal
 
 from .isce_stack import find_reference_xml
 from .radar_crop import cropped_geometry_file, load_crop_window
+from .water_mask import water_fraction_file
 
 logger = logging.getLogger(__name__)
 gdal.UseExceptions()
@@ -174,6 +176,23 @@ def read_strided_geometry(crop_dir, strides_x, strides_y, out_length, out_width)
     return geometry
 
 
+def add_water_layers(geometry, fraction_file, max_water_fraction):
+    """Add ``waterFraction`` and ``waterMask`` (True = land/keep) to the geometry.
+
+    The fraction is kept so the threshold can be changed later in MintPy
+    without rerunning dolphin.
+
+    Raises
+    ------
+    MintpyInputError
+        If the water fraction raster does not match the geometry grid.
+    """
+    _check_shape(fraction_file, geometry["latitude"].shape)
+    fraction = read_raster(fraction_file).astype(np.float32)
+    geometry["waterFraction"] = fraction
+    geometry["waterMask"] = fraction <= max_water_fraction
+
+
 def write_geometry_file(out_file, geometry, metadata):
     """Write ``geometryRadar.h5`` including a slant range distance layer."""
     from mintpy.utils import writefile
@@ -283,6 +302,22 @@ def read_perpendicular_baselines(isce_dir):
     return {date: float(np.mean(values)) for date, values in baseline_dict.items()}
 
 
+def read_connected_components(path):
+    """Read dolphin connected components as MintPy int16 labels (0 = unreliable).
+
+    dolphin stores them as uint16 with no-data 65535 (e.g. masked water pixels).
+    No-data must become 0: clipping it to the int16 range would turn it into a
+    valid component label.
+    """
+    dataset = gdal.Open(str(path))
+    band = dataset.GetRasterBand(1)
+    labels = band.ReadAsArray().astype(np.int64)
+    nodata = band.GetNoDataValue()
+    if nodata is not None:
+        labels[labels == int(nodata)] = 0
+    return np.clip(labels, 0, np.iinfo(np.int16).max).astype(np.int16)
+
+
 def write_ifgram_stack(out_file, interferograms, baselines, metadata, out_shape):
     """Write ``ifgramStack.h5`` one interferogram at a time (low memory use).
 
@@ -324,10 +359,10 @@ def write_ifgram_stack(out_file, interferograms, baselines, metadata, out_shape)
         # dolphin marks invalid pixels with NaN; MintPy expects 0 there.
         unwrapped = np.nan_to_num(read_raster(item["unw"]).astype(np.float32), nan=0.0)
         coherence = np.nan_to_num(read_raster(item["cor"]).astype(np.float32), nan=0.0)
-        conncomp = np.clip(read_raster(item["conncomp"]), 0, np.iinfo(np.int16).max)
+        conncomp = read_connected_components(item["conncomp"])
         writefile.write_hdf5_block(str(out_file), unwrapped[None], "unwrapPhase", block, print_msg=False)
         writefile.write_hdf5_block(str(out_file), coherence[None], "coherence", block, print_msg=False)
-        writefile.write_hdf5_block(str(out_file), conncomp.astype(np.int16)[None],
+        writefile.write_hdf5_block(str(out_file), conncomp[None],
                                    "connectComponent", block, print_msg=False)
     logger.info("Wrote %d interferograms to %s", num_ifgs, out_file)
 
@@ -407,6 +442,8 @@ def prepare_mintpy_inputs(config, include_dolphin_timeseries):
     out_shape = output_shape(window, strides_x, strides_y)
 
     geometry = read_strided_geometry(config.crop_dir, strides_x, strides_y, *out_shape)
+    if config.water_mask.file is not None:
+        add_water_layers(geometry, water_fraction_file(config), config.water_mask.max_water_fraction)
     metadata = build_radar_metadata(
         find_reference_xml(config.isce_dir), window, strides_x, strides_y,
         geometry["latitude"], geometry["longitude"], geometry["incidenceAngle"],

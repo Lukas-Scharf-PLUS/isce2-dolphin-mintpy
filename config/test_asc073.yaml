@@ -15,6 +15,11 @@ aoi:
   bbox: [48.17229133, 48.2238674, 16.34362814, 16.37115647]
   buffer_m: 500
 
+water_mask:
+  # Vienna water bodies (1 = land, 0 = water, 255 = no data), ~1.3 m x 2 m pixels
+  file: /home/lukas/projects/ADUCAT/data/input_data/watermask/watermask.tif
+  max_water_fraction: 0.8
+
 isce:
   reference_date: "20220113"
   num_proc: 4

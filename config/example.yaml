@@ -16,6 +16,12 @@ aoi:
   file: null                         # vector file (gpkg/geojson/shp); its bbox replaces 'bbox'
   buffer_m: 500                      # margin around the AOI for burst selection and crop
 
+water_mask:                          # optional; converted to dolphin's output grid as water fraction
+  file: null                         # geocoded lat/lon raster, e.g. watermask.tif
+  water_value: 0                     # mask value meaning water (other values = land, nodata ignored)
+  max_water_fraction: 0.8            # pixel is masked only if MORE than 80% of it is water
+  use_in_dolphin: true               # pass the mask to dolphin (applied in unwrapping)
+
 isce:                                # stackSentinel.py options (SLC workflow, no multilooking)
   reference_date: null               # YYYYMMDD; default: first date
   swaths: null                       # e.g. [1, 2]; default: swaths whose real burst footprints cover the AOI

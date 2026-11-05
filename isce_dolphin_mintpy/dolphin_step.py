@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ElementTree
 from .config import INVERSION_BY_DOLPHIN
 from .isce_stack import find_reference_xml
 from .radar_crop import cropped_slc_files
+from .water_mask import valid_mask_file
 from .shell import run_command
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,25 @@ def read_radar_wavelength(reference_xml):
     raise DolphinStepError(f"No radarwavelength found in {reference_xml}")
 
 
+def dolphin_mask_file(config):
+    """Return the water mask for dolphin (1 = keep, 0 = water), or None.
+
+    dolphin 0.42 applies ``mask_file`` in unwrapping (and to its own time
+    series), on its output grid, which is where ``water_mask.py`` writes it.
+
+    Raises
+    ------
+    DolphinStepError
+        If a water mask is configured but the crop step has not created it yet.
+    """
+    if config.water_mask.file is None or not config.water_mask.use_in_dolphin:
+        return None
+    mask_file = valid_mask_file(config)
+    if not mask_file.is_file():
+        raise DolphinStepError(f"Water mask {mask_file} is missing. Run the 'crop' step first.")
+    return mask_file
+
+
 def build_dolphin_config(config, slc_files, wavelength):
     """Create a validated dolphin ``DisplacementWorkflow`` for the cropped stack.
 
@@ -63,6 +83,7 @@ def build_dolphin_config(config, slc_files, wavelength):
     run_dolphin_inversion = config.mintpy.inversion == INVERSION_BY_DOLPHIN
     return DisplacementWorkflow(
         cslc_file_list=[str(path) for path in slc_files],
+        mask_file=dolphin_mask_file(config),
         work_directory=config.dolphin_dir,
         input_options={"wavelength": wavelength, "cslc_date_fmt": "%Y%m%d"},
         output_options={

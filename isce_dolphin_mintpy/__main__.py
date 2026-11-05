@@ -2,7 +2,8 @@
 
 Stages run in this order and can be selected with ``--steps``:
     isce     ISCE2 topsStack coregistration (only bursts overlapping the AOI)
-    crop     cut the coregistered radar stack to the AOI (VRT windows)
+    crop     cut the coregistered radar stack to the AOI (VRT windows) and,
+             if configured, convert the water mask to dolphin's output grid
     dolphin  phase linking, interferograms, unwrapping
     mintpy   convert to MintPy and run inversion/corrections
 """
@@ -17,10 +18,17 @@ from .dolphin_step import run_dolphin
 from .isce_stack import run_isce_stack
 from .mintpy_step import run_mintpy
 from .radar_crop import crop_stack_to_aoi
+from .water_mask import create_water_mask
+
+def run_crop(config):
+    """Crop the radar stack to the AOI, then build the water mask on dolphin's grid."""
+    crop_stack_to_aoi(config)
+    create_water_mask(config)
+
 
 STEPS = {
     "isce": run_isce_stack,
-    "crop": crop_stack_to_aoi,
+    "crop": run_crop,
     "dolphin": run_dolphin,
     "mintpy": run_mintpy,
 }

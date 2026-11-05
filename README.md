@@ -120,6 +120,7 @@ isce_dolphin_mintpy/
   swath_selection.py       chooses IW1/2/3 from the real burst footprints + DEM area
   dem_preparation.py       cuts the DEM, converts geoid -> ellipsoid heights, writes ISCE DEM
   radar_crop.py            step "crop": AOI -> radar pixel window -> VRT windows
+  water_mask.py            step "crop": geocoded water mask -> water fraction on dolphin's grid
   dolphin_step.py          step "dolphin": writes dolphin config, runs dolphin
   mintpy_inputs.py         dolphin outputs + ISCE2 metadata -> MintPy HDF5 inputs
   mintpy_step.py           step "mintpy": MintPy template + smallbaselineApp.py runs
@@ -188,6 +189,30 @@ geocoded input. For ISCE2's radar-coordinate stack the pipeline crops instead:
 3. It writes GDAL VRT files that point into the ISCE2 rasters. One VRT is written per SLC and per geometry
    layer. No data is copied. dolphin then processes only the AOI.
 
+### 2b. Water mask in radar coordinates (`crop`, optional)
+
+A geocoded water mask, such as `watermask.tif` in WGS84 with 1 = land and 0 = water, can't be passed to dolphin or MintPy
+directly, because both work in radar coordinates. When `water_mask.file` is set, the `crop` step computes the
+**water fraction** of every dolphin output pixel. For each pixel it places sample points about 2 m apart inside
+the pixel's radar footprint, interpolates their lat/lon from the ISCE2 geometry, and looks them up in the mask.
+Mask no-data is ignored.
+
+A pixel counts as water only if **more than `max_water_fraction`** of it is water. The default is 0.8.
+This is deliberately conservative. Shore pixels can contain strong scatterers such as quay walls or bridge piers,
+and a masked pixel can't be recovered later. Pixels that turn out bad are still removed by the coherence masks.
+
+| File | Content | Used by |
+| --- | --- | --- |
+| `crop/water/water_fraction.tif` | water fraction 0..1 on dolphin's output grid | MintPy (`waterFraction`) |
+| `crop/water/valid_mask.tif` | 1 = keep, 0 = water | dolphin `mask_file` (applied in unwrapping) |
+
+In MintPy's `geometryRadar.h5` the pipeline adds `waterMask` (True = land) and `waterFraction`. The fraction is kept,
+so a different threshold can be tried later in MintPy without rerunning dolphin, e.g. with
+`generate_mask.py inputs/geometryRadar.h5 waterFraction -M 0.5`.
+
+Check whether bridges are water in your mask. If they are, bridges, which are strong and stable scatterers, are masked
+at any threshold.
+
 ### 3. dolphin (`dolphin`)
 
 The config is built with dolphin's own `DisplacementWorkflow` class, so dolphin validates every option.
@@ -209,6 +234,7 @@ It derives `X_FIRST`/`Y_FIRST` from the GeoTIFF, decides the data are geocoded, 
 - **Geometry** is sampled from the ISCE2 rasters at dolphin's output pixel centers. With strides (sy, sx),
   output pixel (i, j) sits on input pixel (i·sy + sy//2, j·sx + sx//2).
 - **Perpendicular baselines** come from the ISCE2 `baselines/` folder.
+- **Connected components**: dolphin's no-data value (65535) becomes 0. In MintPy, 0 means unreliable unwrapping.
 - **Signs**: dolphin forms interferograms as `ref · conj(sec)`, like ISCE2. dolphin and MintPy both use
   `-λ/4π` (positive = toward the satellite). The unwrapped phase is therefore used unchanged.
 

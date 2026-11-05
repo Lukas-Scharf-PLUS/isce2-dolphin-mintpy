@@ -51,6 +51,22 @@ class AoiConfig:
 
 
 @dataclass
+class WaterMaskConfig:
+    """Optional water mask (geocoded raster, e.g. EPSG:4326 GeoTIFF).
+
+    The mask is converted to dolphin's output grid as a *water fraction* per
+    pixel. A pixel counts as water only if more than ``max_water_fraction`` of
+    it is water, so mixed shore pixels (quay walls, bridge piers) are kept;
+    bad pixels can still be removed later with the coherence masks.
+    """
+
+    file: Optional[Path] = None
+    water_value: int = 0
+    max_water_fraction: float = 0.8
+    use_in_dolphin: bool = True
+
+
+@dataclass
 class IsceConfig:
     """Options passed to ISCE2 topsStack (stackSentinel.py)."""
 
@@ -113,6 +129,7 @@ class PipelineConfig:
 
     paths: PathsConfig
     aoi: AoiConfig
+    water_mask: WaterMaskConfig
     isce: IsceConfig
     dolphin: DolphinConfig
     mintpy: MintpyConfig
@@ -136,6 +153,11 @@ class PipelineConfig:
     def mintpy_dir(self):
         """Directory for MintPy processing."""
         return self.paths.work_dir / "mintpy"
+
+    @property
+    def water_dir(self):
+        """Directory for the water fraction and mask on dolphin's output grid."""
+        return self.crop_dir / "water"
 
     @property
     def log_dir(self):
@@ -208,6 +230,11 @@ def _validate(config):
         if not (south < north and west < east):
             raise ConfigError(f"aoi.bbox is not ordered [S, N, W, E]: {config.aoi.bbox}")
 
+    if config.water_mask.file is not None and not config.water_mask.file.is_file():
+        raise ConfigError(f"water_mask.file does not exist: {config.water_mask.file}")
+    if not 0.0 < config.water_mask.max_water_fraction <= 1.0:
+        raise ConfigError("water_mask.max_water_fraction must be in (0, 1].")
+
     if config.mintpy.inversion not in VALID_INVERSION_MODES:
         raise ConfigError(
             f"mintpy.inversion must be one of {VALID_INVERSION_MODES}, "
@@ -238,7 +265,7 @@ def load_config(config_file):
     with open(config_file) as stream:
         raw = yaml.safe_load(stream) or {}
 
-    unknown_sections = set(raw) - {"paths", "aoi", "isce", "dolphin", "mintpy"}
+    unknown_sections = set(raw) - {"paths", "aoi", "water_mask", "isce", "dolphin", "mintpy"}
     if unknown_sections:
         raise ConfigError(f"Unknown config section(s): {sorted(unknown_sections)}")
     if "paths" not in raw:
@@ -247,6 +274,7 @@ def load_config(config_file):
     config = PipelineConfig(
         paths=_build_section(PathsConfig, raw.get("paths"), "paths"),
         aoi=_build_section(AoiConfig, raw.get("aoi"), "aoi"),
+        water_mask=_build_section(WaterMaskConfig, raw.get("water_mask"), "water_mask"),
         isce=_build_section(IsceConfig, raw.get("isce"), "isce"),
         dolphin=_build_section(DolphinConfig, raw.get("dolphin"), "dolphin"),
         mintpy=_build_section(MintpyConfig, raw.get("mintpy"), "mintpy"),
@@ -254,6 +282,8 @@ def load_config(config_file):
     _convert_paths(config.paths)
     if config.aoi.file is not None:
         config.aoi.file = Path(config.aoi.file).expanduser().resolve()
+    if config.water_mask.file is not None:
+        config.water_mask.file = Path(config.water_mask.file).expanduser().resolve()
     if config.isce.reference_date is not None:
         config.isce.reference_date = str(config.isce.reference_date)
     if config.isce.topsstack_dir is not None:
