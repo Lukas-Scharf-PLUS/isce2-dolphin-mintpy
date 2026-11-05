@@ -18,6 +18,7 @@ from .dolphin_step import run_dolphin
 from .isce_stack import run_isce_stack
 from .mintpy_step import run_mintpy
 from .radar_crop import crop_stack_to_aoi
+from .versions import write_versions
 from .water_mask import create_water_mask
 
 def run_crop(config):
@@ -88,6 +89,7 @@ def main(argv=None):
     setup_logging(config.log_dir / "pipeline.log")
     # Keep a copy of the config next to the results for reproducibility.
     shutil.copyfile(arguments.config, config.paths.work_dir / "pipeline_config.yaml")
+    write_versions(config.log_dir)
 
     selected = [name for name in STEPS if name in arguments.steps]
     for name in selected:

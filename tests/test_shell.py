@@ -19,3 +19,12 @@ def test_failing_command_raises_with_log_path(tmp_path):
     with pytest.raises(CommandFailedError, match="fail.log"):
         run_command("echo boom; exit 3", log_file)
     assert "boom" in log_file.read_text()
+
+
+def test_versions_file_lists_pipeline_packages(tmp_path):
+    import json
+
+    from isce_dolphin_mintpy.versions import write_versions
+
+    data = json.loads(write_versions(tmp_path / "logs").read_text())
+    assert {"isce2", "dolphin", "mintpy", "isce_dolphin_mintpy", "python"} <= set(data)

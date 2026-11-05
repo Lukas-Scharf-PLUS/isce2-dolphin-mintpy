@@ -116,6 +116,7 @@ isce_dolphin_mintpy/
   config.py                YAML config -> validated dataclasses
   aoi.py                   AOI bounding box (from bbox or vector file) and buffer
   shell.py                 runs external commands with per-command log files
+  versions.py              writes logs/versions.json (ISCE2, dolphin, MintPy, pipeline commit)
   isce_stack.py            step "isce": stackSentinel.py + run files; finds ISCE2 outputs
   swath_selection.py       chooses IW1/2/3 from the real burst footprints + DEM area
   dem_preparation.py       cuts the DEM, converts geoid -> ellipsoid heights, writes ISCE DEM
@@ -276,6 +277,19 @@ The test config `config/test_asc073.yaml` runs end to end. ISCE2 processes 3 bur
 The height check shows that dolphin's output grid, the sampled ISCE2 geometry and MintPy's geocoding line up.
 With only 3 dates the temporal coherence is close to 1 everywhere, so the masks remove almost nothing, and the
 24-day "velocity" is not meaningful.
+
+## Next step: point file
+
+[mintpy_postprocessing](../mintpy_postprocessing) turns a run directory (`paths.work_dir`) into one
+GeoParquet point file with EGMS-style parameters, the counterpart of dolphin_postprocessing:
+
+```bash
+python run_postprocessing.py --run-dir runs/test_asc073 --area-name vienna
+```
+
+It reads the software versions from `logs/versions.json`, which every pipeline run writes.
+In the Docker image, `PIPELINE_GIT_COMMIT` holds the commit the image was built from.
+The Argo workflow for the cloud is in the aducat_argo repository under `pipelines/isce2_dolphin_mintpy`.
 
 ## Known limitations
 

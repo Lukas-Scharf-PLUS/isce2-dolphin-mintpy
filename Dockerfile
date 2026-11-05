@@ -26,6 +26,11 @@ COPY --chown=$MAMBA_USER:$MAMBA_USER isce_dolphin_mintpy ./isce_dolphin_mintpy
 COPY --chown=$MAMBA_USER:$MAMBA_USER config ./config
 COPY --chown=$MAMBA_USER:$MAMBA_USER tests ./tests
 
+# The git commit the image is built from (set by the GitHub workflow). It is
+# written to logs/versions.json of every run, because the image has no .git folder.
+ARG GIT_COMMIT=""
+ENV PIPELINE_GIT_COMMIT=$GIT_COMMIT
+
 # Print log lines immediately instead of buffering them. MintPy writes plots;
 # matplotlib needs a writable cache folder even when run as another user.
 ENV PYTHONUNBUFFERED=1 \
