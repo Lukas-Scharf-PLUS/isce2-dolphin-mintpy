@@ -55,6 +55,43 @@ Steps: `isce`, `crop`, `dolphin`, `mintpy`. The ISCE2 step can be restarted afte
 Finished topsStack run files are marked in `isce/run_status/` and skipped.
 Relative paths in the config are resolved against the current directory.
 
+## Run with Docker
+
+GitHub Actions builds an image on every push to `main` and publishes it as
+`ghcr.io/lukas-scharf-plus/isce2-dolphin-mintpy` (see `.github/workflows/docker.yml`):
+
+| Event | Image tags |
+| --- | --- |
+| push to `main` | `latest`, `sha-<commit>` |
+| tag `v1.2.3` | `1.2.3`, `1.2` |
+| pull request | built and tested only, not published |
+
+The image contains the conda environment, the pipeline code, the configs and the EGM2008/EGM96 geoid grids.
+The entry point is `python -m isce_dolphin_mintpy`, and `docker run` arguments are appended to it.
+Inside the container the working directory is `/app`, so a relative `work_dir` such as `runs/test_asc073` ends up in
+`/app/runs`. Mount that folder to keep the results. The paths in the config must be paths *inside* the container. The
+simplest way is to mount the data folder at the same path as on the host:
+
+```bash
+docker pull ghcr.io/lukas-scharf-plus/isce2-dolphin-mintpy:latest
+
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v ~/projects/ADUCAT/data:/home/lukas/projects/ADUCAT/data:ro \
+  -v "$PWD/runs":/app/runs \
+  ghcr.io/lukas-scharf-plus/isce2-dolphin-mintpy:latest \
+  run config/test_asc073.yaml
+```
+
+To use your own config, mount it as well, e.g. `-v "$PWD/my_config.yaml":/app/my_config.yaml`, and pass
+`run my_config.yaml`. `--user` makes the output files belong to you instead of the container user. The input data
+can be mounted read-only (`:ro`) because the pipeline never changes it.
+
+Build the image locally:
+
+```bash
+docker build -t isce2-dolphin-mintpy .
+```
+
 ## How to run the tests
 
 ```bash
@@ -67,6 +104,10 @@ The unit tests use small synthetic rasters and need no SAR data.
 
 ```
 environment.yml            conda environment (only the packages the pipeline uses)
+Dockerfile                 container image (micromamba + environment.yml + geoid grids)
+.dockerignore              files kept out of the Docker build
+.github/workflows/
+  docker.yml               builds, tests and publishes the image to ghcr.io
 config/
   example.yaml             every option, with explanations and defaults
   test_asc073.yaml         3-date test over central Vienna (ascending track 73)
