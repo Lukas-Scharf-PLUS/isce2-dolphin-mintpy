@@ -1,0 +1,57 @@
+# Example configuration for the ISCE2 -> dolphin -> MintPy pipeline.
+# Run with:  python -m isce_dolphin_mintpy run config/example.yaml
+# Every option not given here uses the default shown.
+
+paths:
+  slc_dir: /path/to/SLC              # folder with S1*_SLC__*.SAFE (or .zip)
+  orbit_dir: /path/to/orbits         # precise/restituted orbit files (.EOF)
+  dem_file: /path/to/dem.tif         # any GDAL-readable lat/lon DEM covering the processed bursts
+  dem_vertical_datum: egm2008        # REQUIRED: egm2008 (Copernicus DEM), egm96 (SRTM) or ellipsoid
+                                     # the pipeline converts to WGS84 ellipsoid heights for ISCE2
+  work_dir: /path/to/output          # all results go here (isce/, crop/, dolphin/, mintpy/, logs/)
+  aux_dir: null                      # S1 aux calibration files; default: <work_dir>/isce/aux
+
+aoi:
+  bbox: [48.17, 48.23, 16.34, 16.38] # [south, north, west, east] in degrees
+  file: null                         # vector file (gpkg/geojson/shp); its bbox replaces 'bbox'
+  buffer_m: 500                      # margin around the AOI for burst selection and crop
+
+isce:                                # stackSentinel.py options (SLC workflow, no multilooking)
+  reference_date: null               # YYYYMMDD; default: first date
+  swaths: null                       # e.g. [1, 2]; default: swaths whose real burst footprints cover the AOI
+  polarization: vv
+  coregistration: NESD               # NESD = geometry + ESD; geometry = geometry only
+  esd_coherence_threshold: 0.85
+  num_overlap_connections: 3         # ESD pairs per date
+  num_proc: 4                        # parallel commands per run file
+  num_proc4topo: 2
+  omp_threads: 2
+  topsstack_dir: null                # folder with stackSentinel.py; default: auto-detect
+
+dolphin:
+  strides_x: 4                       # output pixel = strides_x range x strides_y azimuth pixels
+  strides_y: 1                       # 4 x 1 is about 15 m x 14 m on the ground
+  half_window_x: 11                  # phase-linking window half size (range)
+  half_window_y: 5                   # phase-linking window half size (azimuth)
+  ministack_size: 15
+  shp_method: glrt                   # statistically homogeneous pixel test
+  max_bandwidth: 3                   # interferogram network: each date with its 3 nearest neighbours
+  unwrap_method: snaphu
+  snaphu_ntiles: [1, 1]
+  threads_per_worker: 4
+  n_parallel_unwrap: 2
+  block_shape: [512, 512]
+
+mintpy:
+  inversion: mintpy                  # mintpy = MintPy network inversion; dolphin = dolphin's time series
+  reference_lalo: null               # [lat, lon] of a stable reference point; default: auto
+  min_temporal_coherence: 0.7        # MintPy network-inversion temporal coherence threshold
+  dolphin_temporal_coherence_threshold: 0.6   # extra mask from phase-linking quality; null = off
+  unwrap_error_correction: "no"      # no / bridging / phase_closure / bridging+phase_closure
+  troposphere: pyaps                 # pyaps (ERA5, needs ~/.cdsapirc) / height_correlation / gacos / no
+  topographic_residual: true         # DEM error correction
+  deramp: "no"                       # no / linear / quadratic
+  solid_earth_tides: false
+  geocode: true
+  geocode_lalo_step: null            # [lat_step, lon_step] in degrees; default: auto
+  extra_template_options: {}         # any other MintPy option, e.g. {mintpy.deramp.maskFile: maskTempCoh.h5}

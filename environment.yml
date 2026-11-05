@@ -1,0 +1,15 @@
+# Conda environment for the ISCE2 -> dolphin -> MintPy pipeline.
+# Only the packages the pipeline actually uses are listed.
+name: isce2-dolphin-mintpy
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - isce2          # topsStack coregistration with ESD
+  - dolphin        # phase linking, interferograms, unwrapping
+  - snaphu         # python bindings to SNAPHU, used by dolphin for unwrapping
+  - mintpy         # corrections and time-series analysis
+  - pyaps3         # ERA5 tropospheric correction inside MintPy
+  - gdal
+  - pyyaml
+  - pytest

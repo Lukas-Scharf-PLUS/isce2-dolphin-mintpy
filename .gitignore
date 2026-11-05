@@ -1,0 +1,9 @@
+# Processing outputs and local environments
+runs/
+.conda_env/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Personal Claude Code settings
+.claude/settings.local.json

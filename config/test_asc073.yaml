@@ -1,0 +1,37 @@
+# Small test run: 3 Sentinel-1A dates (January 2022), ascending track 73, central Vienna.
+# Run with:  python -m isce_dolphin_mintpy run config/test_asc073.yaml
+
+paths:
+  slc_dir: /home/lukas/projects/ADUCAT/data/input_data/ASC_073/SLC
+  orbit_dir: /home/lukas/projects/ADUCAT/data/input_data/ASC_073/orbits
+  # Copernicus DEM GLO-30 (heights above the EGM2008 geoid). Note: DEM_30m.wgs84.dem in
+  # the same folder has identical heights despite its name, i.e. it is NOT ellipsoidal.
+  dem_file: /home/lukas/projects/ADUCAT/data/DEM/DEM_30m.tif
+  dem_vertical_datum: egm2008
+  work_dir: runs/test_asc073
+
+aoi:
+  # Same test area as isce-pipeline/configs/config.env
+  bbox: [48.17229133, 48.2238674, 16.34362814, 16.37115647]
+  buffer_m: 500
+
+isce:
+  reference_date: "20220113"
+  num_proc: 4
+  num_proc4topo: 4
+  omp_threads: 4
+
+dolphin:
+  strides_x: 4
+  strides_y: 1
+  threads_per_worker: 8
+
+mintpy:
+  inversion: mintpy
+  # Only 3 dates: the time series is too short for a meaningful coherence mask
+  min_temporal_coherence: 0.5
+  dolphin_temporal_coherence_threshold: 0.5
+  # No ERA5 credentials (~/.cdsapirc) on this machine yet
+  troposphere: "no"
+  # DEM error estimation needs more dates than this test has
+  topographic_residual: false
