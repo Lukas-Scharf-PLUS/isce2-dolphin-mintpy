@@ -4,6 +4,7 @@ One YAML file describes a full run. Every section maps to one dataclass below;
 see ``config/example.yaml`` for a documented example of every option.
 """
 
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,11 @@ from typing import Optional
 import yaml
 
 from .dem_preparation import VALID_VERTICAL_DATUMS
+from .mintpy_template import (
+    min_temporal_coherence,
+    split_mintpy_section,
+    validate_template_options,
+)
 
 # Network modes that MintPy can invert (see mintpy_step.py).
 INVERSION_BY_MINTPY = "mintpy"
@@ -20,6 +26,33 @@ VALID_INVERSION_MODES = (INVERSION_BY_MINTPY, INVERSION_BY_DOLPHIN)
 
 class ConfigError(ValueError):
     """Raised when the configuration file is incomplete or inconsistent."""
+
+
+class PipelineYamlLoader(yaml.SafeLoader):
+    """Safe YAML loader that recognises numbers like YAML 1.2, not YAML 1.1.
+
+    PyYAML follows YAML 1.1, which reads ``20080520_20090817`` as the integer
+    2008052020090817 (underscores are digit separators) and ``1:5`` as 65
+    (base-60 notation). Both are normal MintPy values (``excludeDate12``,
+    ``excludeIfgIndex``), so only plain numbers like ``16``, ``0.7`` or
+    ``1e-5`` become numbers here; everything else stays text.
+    """
+
+
+_INT_TAG = "tag:yaml.org,2002:int"
+_FLOAT_TAG = "tag:yaml.org,2002:float"
+PipelineYamlLoader.yaml_implicit_resolvers = {
+    first_char: [(tag, regexp) for tag, regexp in resolvers if tag not in (_INT_TAG, _FLOAT_TAG)]
+    for first_char, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+PipelineYamlLoader.add_implicit_resolver(
+    _INT_TAG, re.compile(r"^[-+]?[0-9]+$"), list("-+0123456789"))
+PipelineYamlLoader.add_implicit_resolver(
+    _FLOAT_TAG,
+    re.compile(r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?"
+               r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"),
+    list("-+0123456789."),
+)
 
 
 @dataclass
@@ -104,23 +137,23 @@ class DolphinConfig:
 class MintpyConfig:
     """Options for the MintPy stage.
 
-    ``inversion`` selects who turns interferograms into a time series:
-    ``mintpy`` (network inversion in MintPy) or ``dolphin`` (dolphin's own
-    inversion, MintPy then only applies corrections).
+    Two kinds of options share the YAML ``mintpy`` section:
+
+    - Pipeline options (the other fields of this class). ``inversion`` selects
+      who turns interferograms into a time series: ``mintpy`` (network
+      inversion in MintPy) or ``dolphin`` (dolphin's own inversion, MintPy then
+      only applies corrections). ``dolphin_temporal_coherence_threshold`` adds
+      dolphin's phase-linking quality to MintPy's pixel mask (``null`` = off).
+    - MintPy template options: every key that starts with ``mintpy.``, using the
+      original names from MintPy's ``smallbaselineApp.cfg``. They are kept in
+      ``template_options`` (in file order) and written to the MintPy template
+      unchanged, just like a custom MintPy template. Options that are not given
+      keep MintPy's own default (``auto``).
     """
 
     inversion: str = INVERSION_BY_MINTPY
-    reference_lalo: Optional[list] = None
-    min_temporal_coherence: float = 0.7
     dolphin_temporal_coherence_threshold: Optional[float] = 0.6
-    unwrap_error_correction: str = "no"
-    troposphere: str = "pyaps"
-    topographic_residual: bool = True
-    deramp: str = "no"
-    solid_earth_tides: bool = False
-    geocode: bool = True
-    geocode_lalo_step: Optional[list] = None
-    extra_template_options: dict = field(default_factory=dict)
+    template_options: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -187,6 +220,28 @@ def _build_section(section_class, values, section_name):
         raise ConfigError(f"Section '{section_name}': {error}") from error
 
 
+def _build_mintpy_section(values):
+    """Create the MintPy config from pipeline options and original MintPy template options.
+
+    Raises
+    ------
+    ConfigError
+        If a pipeline option is unknown or a MintPy option is invalid
+        (see ``mintpy_template.validate_template_options``).
+    """
+    try:
+        pipeline_options, template_options = split_mintpy_section(values)
+        validate_template_options(template_options)
+    except ValueError as error:
+        raise ConfigError(f"Section 'mintpy': {error}") from error
+    if "template_options" in pipeline_options:
+        raise ConfigError("Section 'mintpy': write the mintpy.* options directly into the "
+                          "section, not under 'template_options'.")
+    mintpy_config = _build_section(MintpyConfig, pipeline_options, "mintpy")
+    mintpy_config.template_options = template_options
+    return mintpy_config
+
+
 def _convert_paths(paths_config):
     """Turn all path strings of the paths section into absolute ``Path`` objects."""
     for field_info in fields(paths_config):
@@ -240,6 +295,11 @@ def _validate(config):
             f"mintpy.inversion must be one of {VALID_INVERSION_MODES}, "
             f"got '{config.mintpy.inversion}'."
         )
+    try:
+        # Read again in the MintPy step; checked here so a typo fails before ISCE2 runs.
+        min_temporal_coherence(config.mintpy.template_options)
+    except ValueError as error:
+        raise ConfigError(str(error)) from error
     if config.dolphin.strides_x < 1 or config.dolphin.strides_y < 1:
         raise ConfigError("dolphin strides must be >= 1.")
 
@@ -263,7 +323,7 @@ def load_config(config_file):
         If sections are missing, unknown options are given or inputs do not exist.
     """
     with open(config_file) as stream:
-        raw = yaml.safe_load(stream) or {}
+        raw = yaml.load(stream, Loader=PipelineYamlLoader) or {}
 
     unknown_sections = set(raw) - {"paths", "aoi", "water_mask", "isce", "dolphin", "mintpy"}
     if unknown_sections:
@@ -277,7 +337,7 @@ def load_config(config_file):
         water_mask=_build_section(WaterMaskConfig, raw.get("water_mask"), "water_mask"),
         isce=_build_section(IsceConfig, raw.get("isce"), "isce"),
         dolphin=_build_section(DolphinConfig, raw.get("dolphin"), "dolphin"),
-        mintpy=_build_section(MintpyConfig, raw.get("mintpy"), "mintpy"),
+        mintpy=_build_mintpy_section(raw.get("mintpy")),
     )
     _convert_paths(config.paths)
     if config.aoi.file is not None:

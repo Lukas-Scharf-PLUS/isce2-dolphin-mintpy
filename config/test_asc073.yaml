@@ -32,11 +32,24 @@ dolphin:
   threads_per_worker: 8
 
 mintpy:
+  # --- pipeline options ---
   inversion: mintpy
   # Only 3 dates: the time series is too short for a meaningful coherence mask
-  min_temporal_coherence: 0.5
   dolphin_temporal_coherence_threshold: 0.5
+
+  # --- MintPy options (original smallbaselineApp.cfg names, ordered by step) ---
+  mintpy.compute.cluster: local
+  mintpy.compute.numWorker: all
+  mintpy.compute.maxMemory: 16
+  # mintpy.reference.lalo is left on auto: the Vienna reference point
+  # (48.1977, 16.3254) lies west of this small test AOI.
+  mintpy.unwrapError.method: bridging+phase_closure
+  mintpy.networkInversion.maskDataset: connectComponent
+  mintpy.networkInversion.minTempCoh: 0.5
   # No ERA5 credentials (~/.cdsapirc) on this machine yet
-  troposphere: "no"
+  mintpy.troposphericDelay.method: "no"
+  mintpy.deramp: quadratic
   # DEM error estimation needs more dates than this test has
-  topographic_residual: false
+  mintpy.topographicResidual: "no"
+  mintpy.reference.date: "20220101"
+  mintpy.plot: "yes"

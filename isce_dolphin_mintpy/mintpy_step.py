@@ -16,7 +16,10 @@ Two modes (config ``mintpy.inversion``):
     re-referenced to that point and then goes through the same corrections.
 
 In both modes ``load_data`` is never run: the inputs are written by
-``mintpy_inputs.py``.
+``mintpy_inputs.py``. The MintPy template is written from the ``mintpy.*``
+options of the config (see ``mintpy_template.py``). Unless ``mintpy.plot`` is
+``no``, every step is followed by MintPy's plotting, so ``mintpy/pic/`` always
+holds the figures of all steps run so far, even if a later step fails.
 """
 
 import logging
@@ -27,18 +30,29 @@ import numpy as np
 
 from .config import INVERSION_BY_DOLPHIN
 from .mintpy_inputs import DOLPHIN_TEMPORAL_COHERENCE_FILE, prepare_mintpy_inputs
-from .shell import run_command
+from .mintpy_template import (
+    is_plotting_enabled,
+    min_temporal_coherence,
+    requested_reference_date,
+    write_template,
+)
+from .shell import CommandFailedError, run_command
 
 logger = logging.getLogger(__name__)
 
 TEMPLATE_FILE = "isce_dolphin_mintpy.cfg"
 MASK_FILE = "maskTempCoh.h5"
+STACK_FILE = "inputs/ifgramStack.h5"
+SLC_NAME_PATTERN = "S1*_IW_SLC_*"
+QUICK_OVERVIEW_STEP = "quick_overview"
+# Written by quick_overview: number of triplets with non-zero integer ambiguity per pixel.
+AMBIGUITY_FILE = "numTriNonzeroIntAmbiguity.h5"
 
-# MintPy steps before the network inversion. "quick_overview" is left out on
-# purpose: it only makes diagnostic plots, and on phase-linked interferograms
-# every triplet closes (no non-zero integer ambiguity), which makes MintPy's
-# histogram plot crash with "`bins` must be positive" (MintPy 1.6.x).
-STEPS_BEFORE_INVERSION = ["modify_network", "reference_point", "correct_unwrap_error"]
+# MintPy steps before the network inversion, in smallbaselineApp.py order.
+STEPS_BEFORE_INVERSION = ["modify_network", "reference_point", QUICK_OVERVIEW_STEP,
+                          "correct_unwrap_error"]
+# In dolphin mode there is no network inversion, so unwrapping errors are not corrected.
+STEPS_BEFORE_DOLPHIN_SERIES = ["modify_network", "reference_point", QUICK_OVERVIEW_STEP]
 STEPS_AFTER_INVERSION = [
     "correct_LOD", "correct_SET", "correct_ionosphere", "correct_troposphere", "deramp",
     "correct_topography", "residual_RMS", "reference_date", "velocity", "geocode",
@@ -46,62 +60,121 @@ STEPS_AFTER_INVERSION = [
 ]
 
 
-def _yes_no(flag):
-    """Return MintPy's ``yes``/``no`` for a boolean."""
-    return "yes" if flag else "no"
+class MintpyStepError(RuntimeError):
+    """Raised when the MintPy options do not fit the processed stack."""
 
 
-def build_template_options(mintpy_config):
-    """Return the MintPy template options (key -> value) for this run.
+def run_smallbaseline_step(config, template_file, step):
+    """Run one ``smallbaselineApp.py`` step with ``--dostep``.
 
-    ``extra_template_options`` from the config override the generated values,
-    so any MintPy option can be set without changing code.
+    Steps are run individually (instead of ``--start``/``--end``) so that the
+    pipeline's own processing can run between them. ``--plot`` makes MintPy
+    plot every result file that exists so far into ``pic/`` after the step.
+
+    Raises
+    ------
+    CommandFailedError
+        If the step (or its plotting) fails.
     """
-    reference_lalo = "auto"
-    if mintpy_config.reference_lalo:
-        reference_lalo = ", ".join(str(value) for value in mintpy_config.reference_lalo)
-    lalo_step = "auto"
-    if mintpy_config.geocode_lalo_step:
-        lalo_step = ", ".join(str(value) for value in mintpy_config.geocode_lalo_step)
-
-    options = {
-        "mintpy.load.processor": "isce",
-        "mintpy.reference.lalo": reference_lalo,
-        "mintpy.unwrapError.method": mintpy_config.unwrap_error_correction,
-        # dolphin connected components: 0 = unreliable unwrapping
-        "mintpy.networkInversion.maskDataset": "connectComponent",
-        "mintpy.networkInversion.maskThreshold": "0.5",
-        "mintpy.networkInversion.minTempCoh": str(mintpy_config.min_temporal_coherence),
-        "mintpy.troposphericDelay.method": mintpy_config.troposphere,
-        "mintpy.topographicResidual": _yes_no(mintpy_config.topographic_residual),
-        "mintpy.deramp": mintpy_config.deramp,
-        "mintpy.solidEarthTides": _yes_no(mintpy_config.solid_earth_tides),
-        "mintpy.geocode": _yes_no(mintpy_config.geocode),
-        "mintpy.geocode.laloStep": lalo_step,
-        "mintpy.save.kmz": "no",
-        "mintpy.save.hdfEos5": "no",
-        "mintpy.plot": "no",
-    }
-    options.update({str(k): str(v) for k, v in mintpy_config.extra_template_options.items()})
-    return options
+    command = ["smallbaselineApp.py", str(template_file), "--dir", str(config.mintpy_dir),
+               "--dostep", step]
+    if is_plotting_enabled(config.mintpy.template_options):
+        command.append("--plot")
+    run_command(command, config.log_dir / "mintpy.log", cwd=config.mintpy_dir, echo=True)
 
 
-def write_template(mintpy_config, template_file):
-    """Write the MintPy template file used for all smallbaselineApp.py calls."""
-    lines = [f"{key:45s} = {value}" for key, value in build_template_options(mintpy_config).items()]
-    template_file.write_text("\n".join(lines) + "\n")
+def has_no_closure_ambiguity(mintpy_dir):
+    """Return True if quick_overview found no triplet with non-zero integer ambiguity.
+
+    MintPy 1.6 writes ``numTriNonzeroIntAmbiguity.h5`` first and then plots its
+    histogram with ``bins=max``, which crashes ("`bins` must be positive") when
+    the maximum is 0. That happens on phase-linked interferograms where every
+    triplet closes, so it is a sign of *no* unwrapping errors, not a failure.
+    """
+    ambiguity_file = mintpy_dir / AMBIGUITY_FILE
+    if not ambiguity_file.is_file():
+        return False
+    with h5py.File(ambiguity_file, "r") as source:
+        counts = source[list(source.keys())[0]][:]
+    valid = counts[~np.isnan(counts)]
+    return valid.size == 0 or valid.max() == 0
 
 
-def run_smallbaseline_steps(config, template_file, steps):
-    """Run the given ``smallbaselineApp.py`` steps one by one with ``--dostep``.
+def run_steps(config, template_file, steps):
+    """Run the given MintPy steps in order.
 
-    Steps are run individually (instead of ``--start``/``--end``) so that
-    unwanted steps can be left out, see ``STEPS_BEFORE_INVERSION``.
+    Only the known histogram crash of ``quick_overview`` is tolerated (see
+    ``has_no_closure_ambiguity``); it is logged as a warning. Every other
+    failure stops the pipeline.
     """
     for step in steps:
-        command = ["smallbaselineApp.py", str(template_file), "--dir", str(config.mintpy_dir),
-                   "--dostep", step]
-        run_command(command, config.log_dir / "mintpy.log", cwd=config.mintpy_dir, echo=True)
+        try:
+            run_smallbaseline_step(config, template_file, step)
+        except CommandFailedError:
+            if step != QUICK_OVERVIEW_STEP or not has_no_closure_ambiguity(config.mintpy_dir):
+                raise
+            logger.warning(
+                "quick_overview: no triplet with non-zero integer ambiguity (no unwrapping "
+                "errors found by phase closure). MintPy 1.6 cannot plot that histogram; "
+                "%s and avgPhaseVelocity.h5 were written, continuing.", AMBIGUITY_FILE)
+
+
+def check_reference_date_in_stack(mintpy_dir, template_options):
+    """Fail early if ``mintpy.reference.date`` is not an acquisition date of the stack.
+
+    MintPy only checks this in the ``reference_date`` step near the end, after
+    the inversion and all corrections have run.
+
+    Raises
+    ------
+    MintpyStepError
+        If the requested date is not in ``inputs/ifgramStack.h5``.
+    """
+    reference_date = requested_reference_date(template_options)
+    if reference_date is None:
+        return
+    with h5py.File(mintpy_dir / STACK_FILE, "r") as stack:
+        stack_dates = sorted({date.decode() for date in stack["date"][:].flatten()})
+    if reference_date not in stack_dates:
+        raise MintpyStepError(
+            f"mintpy.reference.date = {reference_date} is not an acquisition date of this "
+            f"stack ({stack_dates[0]} ... {stack_dates[-1]}, {len(stack_dates)} dates). "
+            "Use one of the stack dates or 'auto'."
+        )
+
+
+def slc_acquisition_dates(slc_dir):
+    """Return the sorted acquisition dates (YYYYMMDD) of the Sentinel-1 SAFE folders/zips in ``slc_dir``.
+
+    The date is the 6th ``_``-separated part of the SAFE name, e.g.
+    ``S1A_IW_SLC__1SDV_20220101T164306_...`` -> ``20220101``.
+    """
+    safes = list(slc_dir.glob(SLC_NAME_PATTERN + ".SAFE")) + list(slc_dir.glob(SLC_NAME_PATTERN + ".zip"))
+    return sorted({path.name.split("_")[5][:8] for path in safes})
+
+
+def check_reference_date_in_slc_dir(config):
+    """Fail before ISCE2 starts if ``mintpy.reference.date`` has no SLC in ``paths.slc_dir``.
+
+    The final check against the interferogram stack happens again in the
+    ``mintpy`` step (``check_reference_date_in_stack``), because MintPy's
+    network modification can still drop dates.
+
+    Raises
+    ------
+    MintpyStepError
+        If SLCs exist but none is from the requested reference date.
+    """
+    reference_date = requested_reference_date(config.mintpy.template_options)
+    if reference_date is None:
+        return
+    slc_dates = slc_acquisition_dates(config.paths.slc_dir)
+    if slc_dates and reference_date not in slc_dates:
+        raise MintpyStepError(
+            f"mintpy.reference.date = {reference_date} has no SLC in {config.paths.slc_dir} "
+            f"({slc_dates[0]} ... {slc_dates[-1]}, {len(slc_dates)} dates). "
+            "Use one of these dates or 'auto'."
+        )
 
 
 def restrict_mask_with_dolphin_coherence(mintpy_dir, threshold):
@@ -134,7 +207,7 @@ def reference_timeseries_to_stack_point(mintpy_dir):
     RuntimeError
         If the interferogram stack has no reference point yet.
     """
-    with h5py.File(mintpy_dir / "inputs" / "ifgramStack.h5", "r") as stack:
+    with h5py.File(mintpy_dir / STACK_FILE, "r") as stack:
         reference_attributes = {key: stack.attrs[key] for key in
                                 ("REF_Y", "REF_X", "REF_LAT", "REF_LON") if key in stack.attrs}
     if "REF_Y" not in reference_attributes:
@@ -150,34 +223,47 @@ def reference_timeseries_to_stack_point(mintpy_dir):
     logger.info("dolphin time series re-referenced to pixel y=%d, x=%d", ref_y, ref_x)
 
 
-def use_dolphin_temporal_coherence(config, template_file):
-    """Use dolphin's temporal coherence as MintPy's ``temporalCoherence.h5`` and mask."""
+def use_dolphin_temporal_coherence(config):
+    """Use dolphin's temporal coherence as MintPy's ``temporalCoherence.h5`` and mask.
+
+    The mask threshold is ``dolphin_temporal_coherence_threshold``, or
+    ``mintpy.networkInversion.minTempCoh`` if that is ``null``.
+    """
     mintpy_dir = config.mintpy_dir
     shutil.copyfile(mintpy_dir / DOLPHIN_TEMPORAL_COHERENCE_FILE, mintpy_dir / "temporalCoherence.h5")
     threshold = config.mintpy.dolphin_temporal_coherence_threshold
     if threshold is None:
-        threshold = config.mintpy.min_temporal_coherence
+        threshold = min_temporal_coherence(config.mintpy.template_options)
     run_command(["generate_mask.py", "temporalCoherence.h5", "-m", str(threshold),
                  "-o", MASK_FILE], config.log_dir / "mintpy.log", cwd=mintpy_dir)
 
 
 def run_mintpy(config):
-    """Convert dolphin outputs, then run MintPy in the configured mode."""
+    """Convert dolphin outputs, then run MintPy in the configured mode.
+
+    Raises
+    ------
+    MintpyStepError
+        If ``mintpy.reference.date`` is not a date of the stack.
+    CommandFailedError
+        If a MintPy command fails (details in ``logs/mintpy.log``).
+    """
     use_dolphin_series = config.mintpy.inversion == INVERSION_BY_DOLPHIN
     config.mintpy_dir.mkdir(parents=True, exist_ok=True)
     prepare_mintpy_inputs(config, include_dolphin_timeseries=use_dolphin_series)
+    check_reference_date_in_stack(config.mintpy_dir, config.mintpy.template_options)
 
     template_file = config.mintpy_dir / TEMPLATE_FILE
     write_template(config.mintpy, template_file)
 
     if use_dolphin_series:
-        run_smallbaseline_steps(config, template_file, ["modify_network", "reference_point"])
+        run_steps(config, template_file, STEPS_BEFORE_DOLPHIN_SERIES)
         reference_timeseries_to_stack_point(config.mintpy_dir)
-        use_dolphin_temporal_coherence(config, template_file)
+        use_dolphin_temporal_coherence(config)
     else:
-        run_smallbaseline_steps(config, template_file, STEPS_BEFORE_INVERSION + ["invert_network"])
+        run_steps(config, template_file, STEPS_BEFORE_INVERSION + ["invert_network"])
         threshold = config.mintpy.dolphin_temporal_coherence_threshold
         if threshold is not None:
             restrict_mask_with_dolphin_coherence(config.mintpy_dir, threshold)
 
-    run_smallbaseline_steps(config, template_file, STEPS_AFTER_INVERSION)
+    run_steps(config, template_file, STEPS_AFTER_INVERSION)

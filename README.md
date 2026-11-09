@@ -32,9 +32,9 @@ The pipeline looks for the topsStack scripts (`stackSentinel.py`) in this order:
 If none of these exist, clone `https://github.com/isce-framework/isce2` and set
 `isce.topsstack_dir: <clone>/contrib/stack/topsStack`.
 
-**ERA5 tropospheric correction** (`mintpy.troposphere: pyaps`) needs a Copernicus Climate Data Store account
-with its key in `~/.cdsapirc`. See the [PyAPS documentation](https://github.com/insarlab/PyAPS).
-Without that file, use `height_correlation`, `gacos` or `no`.
+**ERA5 tropospheric correction** (`mintpy.troposphericDelay.method: pyaps`, MintPy's default) needs a
+Copernicus Climate Data Store account with its key in `~/.cdsapirc`. See the [PyAPS documentation](https://github.com/insarlab/PyAPS).
+Without that file, use `height_correlation`, `gacos` or `"no"`.
 
 No environment variables are required.
 
@@ -124,8 +124,9 @@ isce_dolphin_mintpy/
   water_mask.py            step "crop": geocoded water mask -> water fraction on dolphin's grid
   dolphin_step.py          step "dolphin": writes dolphin config, runs dolphin
   mintpy_inputs.py         dolphin outputs + ISCE2 metadata -> MintPy HDF5 inputs
-  mintpy_step.py           step "mintpy": MintPy template + smallbaselineApp.py runs
-tests/                     unit tests
+  mintpy_template.py       mintpy.* options of the config -> checked MintPy template file
+  mintpy_step.py           step "mintpy": smallbaselineApp.py runs, step by step with plots
+tests/                     unit tests (one test_<module>.py per module)
 runs/                      processing output of local runs (git-ignored)
 ```
 
@@ -135,7 +136,7 @@ Output layout inside `paths.work_dir`:
 isce/      ISCE2 topsStack work dir (merged/SLC, merged/geom_reference, reference, baselines, ...)
 crop/      VRT windows of the SLCs and geometry for the AOI + crop_window.json
 dolphin/   dolphin work dir (dolphin_config.yaml, interferograms/, unwrapped/, timeseries/)
-mintpy/    MintPy work dir (inputs/, timeseries*.h5, velocity.h5, geo/)
+mintpy/    MintPy work dir (inputs/, timeseries*.h5, velocity.h5, geo/, pic/ = figures of all steps)
 logs/      pipeline.log and one log per external command
 ```
 
@@ -255,12 +256,64 @@ coherence ≥ `dolphin_temporal_coherence_threshold`. This is needed because pha
 almost no closure phase, so MintPy's own temporal coherence is close to 1 nearly everywhere and hardly filters
 anything. In `dolphin` mode, dolphin's temporal coherence becomes MintPy's `temporalCoherence.h5`.
 
-MintPy steps are run one by one with `smallbaselineApp.py --dostep`, without `load_data` and without
-`quick_overview`. `quick_overview` only makes diagnostic plots. On phase-linked interferograms every triplet closes,
-which makes MintPy 1.6's closure-phase histogram crash with "`bins` must be positive".
+**MintPy options in the config.** The `mintpy` section works like a custom MintPy template. Besides the two
+pipeline options (`inversion`, `dolphin_temporal_coherence_threshold`), every key that starts with `mintpy.` is an
+original `smallbaselineApp.cfg` option. These options are written unchanged, in file order, to
+`mintpy/isce_dolphin_mintpy.cfg`. MintPy then merges them into its full `mintpy/smallbaselineApp.cfg`, and every
+option you leave out keeps MintPy's default (`auto`):
 
-After the inversion, all steps from `correct_LOD` to the end run. That covers the troposphere, DEM error,
-deramping, reference date, velocity and geocoding with the ISCE2 lat/lon lookup.
+```yaml
+mintpy:
+  inversion: mintpy
+  dolphin_temporal_coherence_threshold: 0.6
+  mintpy.compute.cluster: local
+  mintpy.reference.lalo: 48.19767391928604, 16.325432508158606
+  mintpy.unwrapError.method: bridging+phase_closure
+  mintpy.networkInversion.maskDataset: connectComponent
+  mintpy.deramp: quadratic
+  mintpy.reference.date: "20220101"
+```
+
+When the config is loaded, the pipeline checks a few things before ISCE2 starts:
+
+- Every option of MintPy's `smallbaselineApp.cfg` can be set (`smallbaselineApp.py -H` lists them).
+  MintPy silently ignores unknown options, so option names are checked against MintPy's own default templates.
+  A typo stops the run with an error.
+- `mintpy.load.*`, `mintpy.subset.*` and `mintpy.multilook.*` are passed on, but they log a warning. They only
+  act in `load_data`, which never runs here. Set the area with `aoi.bbox` and the pixel size with the dolphin
+  strides instead. The pipeline sets `mintpy.load.processor = isce` by default.
+- Values reach the template as written. The config loader reads numbers by YAML 1.2 rules, so
+  `20080520_20090817` (`excludeDate12`) and `1:5` (`excludeIfgIndex`) stay text. Standard YAML 1.1 would
+  turn them into the numbers 2008052020090817 and 65.
+- Unquoted `yes`/`no` are read as booleans and turned back into `yes`/`no`. Lists become `a, b`.
+  Quoting (`"no"`) is still clearer.
+- The old option names (`troposphere`, `deramp`, `extra_template_options`, ...) give an error that names the
+  MintPy option to use instead.
+
+An explicit `mintpy.reference.date` (YYYYMMDD) is checked twice. Before the `isce` step, it is checked against the
+SLC dates in `paths.slc_dir`. At the start of the `mintpy` step, it is checked against the dates in
+`inputs/ifgramStack.h5`. Without these checks, MintPy would only fail in its `reference_date` step, after ISCE2,
+dolphin, the inversion and all corrections.
+
+**Steps.** MintPy steps run one by one with `smallbaselineApp.py --dostep` (never `load_data`):
+
+| Mode | Steps |
+| --- | --- |
+| `mintpy` | `modify_network`, `reference_point`, `quick_overview`, `correct_unwrap_error`, `invert_network`, then `correct_LOD` ... `hdfeos5` |
+| `dolphin` | `modify_network`, `reference_point`, `quick_overview`, then `correct_LOD` ... `hdfeos5` |
+
+`quick_overview` writes `avgPhaseVelocity.h5` (interferogram stacking) and `numTriNonzeroIntAmbiguity.h5`, the
+number of triplets per pixel whose unwrapped closure phase is a non-zero multiple of 2π. With phase linking the
+wrapped closure phase is zero, so any non-zero count comes from an unwrapping error. When the count is 0
+everywhere, MintPy 1.6 crashes while plotting the histogram ("`bins` must be positive"). The pipeline logs a
+warning in that case and continues. Any other failure of that step stops the run.
+
+**Plots.** Unless `mintpy.plot: "no"`, every step runs with `--plot`. After each step MintPy draws every result
+file that exists so far into `mintpy/pic/`, for example the network, unwrapped interferograms before and after
+unwrapping error correction, `avgPhaseVelocity`, the masks, the time series, velocity and geocoded maps. If a
+later step fails, the figures of the earlier steps are already saved. Because the figures are drawn again after
+every step, this adds some run time on large stacks. Switch it off with `mintpy.plot: "no"` and plot once at the
+end with `smallbaselineApp.py isce_dolphin_mintpy.cfg --dir . --plot` inside `mintpy/`.
 
 ## Test result (3 dates, central Vienna)
 

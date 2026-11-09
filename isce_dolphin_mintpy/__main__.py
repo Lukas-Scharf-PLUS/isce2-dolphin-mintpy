@@ -16,7 +16,7 @@ import sys
 from .config import ConfigError, load_config
 from .dolphin_step import run_dolphin
 from .isce_stack import run_isce_stack
-from .mintpy_step import run_mintpy
+from .mintpy_step import check_reference_date_in_slc_dir, run_mintpy
 from .radar_crop import crop_stack_to_aoi
 from .versions import write_versions
 from .water_mask import create_water_mask
@@ -92,6 +92,9 @@ def main(argv=None):
     write_versions(config.log_dir)
 
     selected = [name for name in STEPS if name in arguments.steps]
+    if "isce" in selected:
+        # A wrong MintPy reference date would otherwise only fail after ISCE2 and dolphin.
+        check_reference_date_in_slc_dir(config)
     for name in selected:
         logging.getLogger(__name__).info("=== Step: %s ===", name)
         STEPS[name](config)

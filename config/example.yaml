@@ -49,15 +49,37 @@ dolphin:
   block_shape: [512, 512]
 
 mintpy:
+  # --- pipeline options ---
   inversion: mintpy                  # mintpy = MintPy network inversion; dolphin = dolphin's time series
-  reference_lalo: null               # [lat, lon] of a stable reference point; default: auto
-  min_temporal_coherence: 0.7        # MintPy network-inversion temporal coherence threshold
   dolphin_temporal_coherence_threshold: 0.6   # extra mask from phase-linking quality; null = off
-  unwrap_error_correction: "no"      # no / bridging / phase_closure / bridging+phase_closure
-  troposphere: pyaps                 # pyaps (ERA5, needs ~/.cdsapirc) / height_correlation / gacos / no
-  topographic_residual: true         # DEM error correction
-  deramp: "no"                       # no / linear / quadratic
-  solid_earth_tides: false
-  geocode: true
-  geocode_lalo_step: null            # [lat_step, lon_step] in degrees; default: auto
-  extra_template_options: {}         # any other MintPy option, e.g. {mintpy.deramp.maskFile: maskTempCoh.h5}
+
+  # --- MintPy options ---
+  # Every key starting with "mintpy." is an original smallbaselineApp.cfg option. It is written
+  # unchanged to <work_dir>/mintpy/isce_dolphin_mintpy.cfg, like a custom MintPy template.
+  # Options not listed keep MintPy's default (auto). All options with explanations:
+  #   smallbaselineApp.py -H     or   mintpy/defaults/smallbaselineApp.cfg
+  # Quote yes/no ("no"), otherwise YAML reads them as true/false (both work, quoting is clearer).
+  # Every smallbaselineApp.cfg option is accepted; misspelled names stop the run. mintpy.load.*,
+  # mintpy.subset.* and mintpy.multilook.* only warn: load_data is not run (use aoi.bbox / strides).
+  # Ordered like smallbaselineApp.cfg, i.e. by processing step.
+
+  ## computing resources
+  mintpy.compute.cluster: local                      # parallel with Dask on this machine
+  mintpy.compute.numWorker: all                      # all CPU cores
+  mintpy.compute.maxMemory: 16                       # GB
+  ## reference_point
+  mintpy.reference.lalo: 48.19767391928604, 16.325432508158606   # must lie in the AOI (this point: whole-Vienna AOI)
+  ## correct_unwrap_error
+  mintpy.unwrapError.method: bridging+phase_closure  # no / bridging / phase_closure / bridging+phase_closure
+  ## invert_network
+  mintpy.networkInversion.maskDataset: connectComponent   # dolphin conn. component 0 = unreliable unwrapping
+  mintpy.networkInversion.minTempCoh: 0.7
+  ## correct_troposphere
+  mintpy.troposphericDelay.method: pyaps             # pyaps (ERA5, needs ~/.cdsapirc) / height_correlation / gacos / no
+  mintpy.troposphericDelay.weatherModel: ERA5
+  ## deramp
+  mintpy.deramp: quadratic                           # no / linear / quadratic
+  ## reference_date
+  mintpy.reference.date: "20220101"                  # must be an acquisition date of the stack (checked early)
+  ## plot
+  mintpy.plot: "yes"                                 # figures of every step in <work_dir>/mintpy/pic/
