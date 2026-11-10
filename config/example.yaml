@@ -34,23 +34,40 @@ isce:                                # stackSentinel.py options (SLC workflow, n
   omp_threads: 2
   topsstack_dir: null                # folder with stackSentinel.py; default: auto-detect
 
+# Who turns the interferograms into a time series. Affects the dolphin AND the MintPy step:
+#   mintpy  = MintPy network inversion of dolphin's interferograms (with unwrapping error correction)
+#   dolphin = dolphin's own time series inversion; MintPy only applies the corrections
+# Switching it requires rerunning dolphin (--steps dolphin mintpy).
+inversion: mintpy
+
 dolphin:
-  strides_x: 4                       # output pixel = strides_x range x strides_y azimuth pixels
-  strides_y: 1                       # 4 x 1 is about 15 m x 14 m on the ground
-  half_window_x: 11                  # phase-linking window half size (range)
-  half_window_y: 5                   # phase-linking window half size (azimuth)
-  ministack_size: 15
-  shp_method: glrt                   # statistically homogeneous pixel test
-  max_bandwidth: 3                   # interferogram network: each date with its 3 nearest neighbours
-  unwrap_method: snaphu
-  snaphu_ntiles: [1, 1]
-  threads_per_worker: 4
-  n_parallel_unwrap: 2
-  block_shape: [512, 512]
+  # dolphin's own config structure (same names and nesting as dolphin's YAML). Every
+  # option is listed with its description and the pipeline default in
+  # config/dolphin_options_reference.yaml; options not given here keep that default.
+  # The pipeline sets the input SLCs, work directory, water mask and wavelength itself.
+  # All options are checked with dolphin's own model when the config is loaded.
+  output_options:
+    strides: {x: 4, y: 1}            # output pixel = 4 range x 1 azimuth pixels, about 15 m x 14 m
+  phase_linking:
+    ministack_size: 15
+    half_window: {x: 11, y: 5}       # phase-linking window half size (range, azimuth)
+    shp_method: glrt                 # statistically homogeneous pixel test
+  interferogram_network:
+    max_bandwidth: 3                 # each date with its 3 nearest neighbours
+  unwrap_options:
+    unwrap_method: whirlwind         # snaphu / whirlwind / spurt / icu / phass
+    n_parallel_jobs: -1              # -1: dolphin chooses (whirlwind: CPUs // 4 at once)
+    whirlwind_options:
+      num_threads: null              # null: all CPUs (shared by the parallel unwraps)
+      conncomp_reliability: 0.5      # higher = more conservative connected components
+    snaphu_options:                  # only used with unwrap_method: snaphu
+      ntiles: [1, 1]
+  worker_settings:
+    threads_per_worker: 4
+    block_shape: [512, 512]
 
 mintpy:
   # --- pipeline options ---
-  inversion: mintpy                  # mintpy = MintPy network inversion; dolphin = dolphin's time series
   dolphin_temporal_coherence_threshold: 0.6   # extra mask from phase-linking quality; null = off
 
   # --- MintPy options ---

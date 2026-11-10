@@ -12,6 +12,12 @@ from typing import Optional
 import yaml
 
 from .dem_preparation import VALID_VERTICAL_DATUMS
+from .dolphin_options import (
+    apply_inversion_mode,
+    check_unwrapper_installed,
+    merge_with_defaults,
+    validate_with_dolphin,
+)
 from .mintpy_template import (
     min_temporal_coherence,
     split_mintpy_section,
@@ -117,20 +123,25 @@ class IsceConfig:
 
 @dataclass
 class DolphinConfig:
-    """Options for dolphin phase linking, interferograms and unwrapping."""
+    """Options for dolphin phase linking, interferograms and unwrapping.
 
-    strides_x: int = 4
-    strides_y: int = 1
-    half_window_x: int = 11
-    half_window_y: int = 5
-    ministack_size: int = 15
-    shp_method: str = "glrt"
-    max_bandwidth: int = 3
-    unwrap_method: str = "snaphu"
-    snaphu_ntiles: list = field(default_factory=lambda: [1, 1])
-    threads_per_worker: int = 4
-    n_parallel_unwrap: int = 2
-    block_shape: list = field(default_factory=lambda: [512, 512])
+    ``options`` holds dolphin's own config structure (same names and nesting as
+    dolphin's YAML), already merged over the pipeline defaults; see
+    ``dolphin_options.py``. The output grid (strides) is also needed by the
+    crop and MintPy steps, so it is available as properties.
+    """
+
+    options: dict = field(default_factory=dict)
+
+    @property
+    def strides_x(self):
+        """Output pixel spacing in range, in full-resolution pixels."""
+        return int(self.options["output_options"]["strides"]["x"])
+
+    @property
+    def strides_y(self):
+        """Output pixel spacing in azimuth, in full-resolution pixels."""
+        return int(self.options["output_options"]["strides"]["y"])
 
 
 @dataclass
@@ -139,26 +150,30 @@ class MintpyConfig:
 
     Two kinds of options share the YAML ``mintpy`` section:
 
-    - Pipeline options (the other fields of this class). ``inversion`` selects
-      who turns interferograms into a time series: ``mintpy`` (network
-      inversion in MintPy) or ``dolphin`` (dolphin's own inversion, MintPy then
-      only applies corrections). ``dolphin_temporal_coherence_threshold`` adds
-      dolphin's phase-linking quality to MintPy's pixel mask (``null`` = off).
+    - Pipeline option ``dolphin_temporal_coherence_threshold``: adds dolphin's
+      phase-linking quality to MintPy's pixel mask (``null`` = off).
     - MintPy template options: every key that starts with ``mintpy.``, using the
       original names from MintPy's ``smallbaselineApp.cfg``. They are kept in
       ``template_options`` (in file order) and written to the MintPy template
       unchanged, just like a custom MintPy template. Options that are not given
       keep MintPy's own default (``auto``).
+
+    Who inverts the time series is the top-level ``inversion`` option, because
+    it changes both the dolphin and the MintPy step.
     """
 
-    inversion: str = INVERSION_BY_MINTPY
     dolphin_temporal_coherence_threshold: Optional[float] = 0.6
     template_options: dict = field(default_factory=dict)
 
 
 @dataclass
 class PipelineConfig:
-    """Complete pipeline configuration."""
+    """Complete pipeline configuration.
+
+    ``inversion`` (top-level YAML option) selects who turns the interferograms
+    into a time series: ``mintpy`` (MintPy network inversion) or ``dolphin``
+    (dolphin's own inversion; MintPy then only applies corrections).
+    """
 
     paths: PathsConfig
     aoi: AoiConfig
@@ -166,6 +181,12 @@ class PipelineConfig:
     isce: IsceConfig
     dolphin: DolphinConfig
     mintpy: MintpyConfig
+    inversion: str = INVERSION_BY_MINTPY
+
+    @property
+    def dolphin_inverts(self):
+        """True if dolphin's time series is used (``inversion: dolphin``)."""
+        return self.inversion == INVERSION_BY_DOLPHIN
 
     @property
     def isce_dir(self):
@@ -220,6 +241,25 @@ def _build_section(section_class, values, section_name):
         raise ConfigError(f"Section '{section_name}': {error}") from error
 
 
+def _build_dolphin_section(values):
+    """Create the dolphin config: the user's dolphin options merged over the pipeline defaults.
+
+    Whether dolphin also inverts the time series depends on the ``mintpy``
+    section, so the full check with dolphin's own model happens in ``_validate``.
+
+    Raises
+    ------
+    ConfigError
+        If an old option name or a pipeline-owned option is used.
+    """
+    if values is not None and not isinstance(values, dict):
+        raise ConfigError("Section 'dolphin' must be a mapping of dolphin options.")
+    try:
+        return DolphinConfig(options=merge_with_defaults(values))
+    except ValueError as error:
+        raise ConfigError(f"Section 'dolphin': {error}") from error
+
+
 def _build_mintpy_section(values):
     """Create the MintPy config from pipeline options and original MintPy template options.
 
@@ -237,6 +277,10 @@ def _build_mintpy_section(values):
     if "template_options" in pipeline_options:
         raise ConfigError("Section 'mintpy': write the mintpy.* options directly into the "
                           "section, not under 'template_options'.")
+    if "inversion" in pipeline_options:
+        raise ConfigError("Option 'mintpy.inversion' moved to the top level of the config: "
+                          "write 'inversion: mintpy' or 'inversion: dolphin' after the "
+                          "'isce' section.")
     mintpy_config = _build_section(MintpyConfig, pipeline_options, "mintpy")
     mintpy_config.template_options = template_options
     return mintpy_config
@@ -290,18 +334,24 @@ def _validate(config):
     if not 0.0 < config.water_mask.max_water_fraction <= 1.0:
         raise ConfigError("water_mask.max_water_fraction must be in (0, 1].")
 
-    if config.mintpy.inversion not in VALID_INVERSION_MODES:
+    if config.inversion not in VALID_INVERSION_MODES:
         raise ConfigError(
-            f"mintpy.inversion must be one of {VALID_INVERSION_MODES}, "
-            f"got '{config.mintpy.inversion}'."
+            f"inversion must be one of {VALID_INVERSION_MODES}, got '{config.inversion}'."
         )
     try:
         # Read again in the MintPy step; checked here so a typo fails before ISCE2 runs.
         min_temporal_coherence(config.mintpy.template_options)
     except ValueError as error:
         raise ConfigError(str(error)) from error
-    if config.dolphin.strides_x < 1 or config.dolphin.strides_y < 1:
-        raise ConfigError("dolphin strides must be >= 1.")
+    try:
+        # The dolphin options with the time series settings of the chosen mode are
+        # checked with dolphin's own model, so a typo fails before ISCE2 runs.
+        config.dolphin.options = apply_inversion_mode(config.dolphin.options,
+                                                      config.dolphin_inverts)
+        validate_with_dolphin(config.dolphin.options)
+        check_unwrapper_installed(config.dolphin.options)
+    except ValueError as error:
+        raise ConfigError(f"Section 'dolphin': {error}") from error
 
 
 def load_config(config_file):
@@ -325,7 +375,8 @@ def load_config(config_file):
     with open(config_file) as stream:
         raw = yaml.load(stream, Loader=PipelineYamlLoader) or {}
 
-    unknown_sections = set(raw) - {"paths", "aoi", "water_mask", "isce", "dolphin", "mintpy"}
+    unknown_sections = set(raw) - {"paths", "aoi", "water_mask", "isce", "inversion",
+                                   "dolphin", "mintpy"}
     if unknown_sections:
         raise ConfigError(f"Unknown config section(s): {sorted(unknown_sections)}")
     if "paths" not in raw:
@@ -336,8 +387,9 @@ def load_config(config_file):
         aoi=_build_section(AoiConfig, raw.get("aoi"), "aoi"),
         water_mask=_build_section(WaterMaskConfig, raw.get("water_mask"), "water_mask"),
         isce=_build_section(IsceConfig, raw.get("isce"), "isce"),
-        dolphin=_build_section(DolphinConfig, raw.get("dolphin"), "dolphin"),
+        dolphin=_build_dolphin_section(raw.get("dolphin")),
         mintpy=_build_mintpy_section(raw.get("mintpy")),
+        inversion=str(raw.get("inversion", INVERSION_BY_MINTPY)).lower(),
     )
     _convert_paths(config.paths)
     if config.aoi.file is not None:

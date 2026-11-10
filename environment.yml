@@ -6,10 +6,18 @@ channels:
 dependencies:
   - python=3.11
   - isce2          # topsStack coregistration with ESD
-  - dolphin        # phase linking, interferograms, unwrapping
+  # phase linking, interferograms, unwrapping. Pinned: its whirlwind backend was
+  # tested with whirlwind-insar 0.10.0 below.
+  - dolphin=0.42.8
   - snaphu         # python bindings to SNAPHU, used by dolphin for unwrapping
   - mintpy         # corrections and time-series analysis
   - pyaps3         # ERA5 tropospheric correction inside MintPy
   - gdal
   - pyyaml
   - pytest
+  - pip
+  - pip:
+      # whirlwind unwrapper for dolphin (unwrap_options.unwrap_method: whirlwind),
+      # same version as the compass-dolphin pipeline. Installs the Python module
+      # "whirlwind"; the PyPI package named "whirlwind" is unrelated.
+      - whirlwind-insar==0.10.0

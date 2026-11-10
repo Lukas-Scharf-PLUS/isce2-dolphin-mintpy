@@ -23,7 +23,7 @@ Files written (``<work_dir>/mintpy``):
                                    (+ waterMask, waterFraction with a water mask)
     inputs/ifgramStack.h5          unwrapPhase, coherence, connectComponent, bperp
     dolphinTemporalCoherence.h5    dolphin phase-linking temporal coherence
-    timeseries.h5                  only for ``mintpy.inversion: dolphin``
+    timeseries.h5                  only for ``inversion: dolphin``
 """
 
 import logging
@@ -401,7 +401,7 @@ def write_dolphin_timeseries(out_file, dolphin_dir, baselines, metadata, out_sha
     if not series_files:
         raise MintpyInputError(
             f"No dolphin time series in {dolphin_dir / 'timeseries'}. "
-            "Was dolphin run with mintpy.inversion: dolphin?"
+            "Was dolphin run with 'inversion: dolphin'?"
         )
     reference_dates = {parse_date_pair(path)[0] for path in series_files}
     if len(reference_dates) != 1:

@@ -25,11 +25,11 @@ def fake_mintpy_defaults(tmp_path):
 
 def test_split_keeps_pipeline_options_and_mintpy_options_apart():
     pipeline, template = split_mintpy_section({
-        "inversion": "mintpy",
+        "dolphin_temporal_coherence_threshold": 0.6,
         "mintpy.reference.lalo": [48.19767, 16.32543],
         "mintpy.plot": True,
     })
-    assert pipeline == {"inversion": "mintpy"}
+    assert pipeline == {"dolphin_temporal_coherence_threshold": 0.6}
     assert template == {"mintpy.reference.lalo": "48.19767, 16.32543", "mintpy.plot": "yes"}
 
 

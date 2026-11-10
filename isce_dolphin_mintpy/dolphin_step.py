@@ -6,12 +6,16 @@ GDAL. The date of each SLC is parsed from its file name (``<YYYYMMDD>.slc.vrt``)
 The radar wavelength is taken from the ISCE2 reference XML and handed to
 dolphin, so its time series / velocity outputs are in meters (positive = motion
 toward the satellite, the same convention as MintPy).
+
+Every other dolphin option (phase linking, network, unwrapper incl. whirlwind,
+...) comes from the config's ``dolphin`` section in dolphin's own structure.
+The complete config is saved as ``dolphin/dolphin_config.yaml``.
 """
 
 import logging
 import xml.etree.ElementTree as ElementTree
 
-from .config import INVERSION_BY_DOLPHIN
+from .dolphin_options import apply_inversion_mode, build_workflow_options
 from .isce_stack import find_reference_xml
 from .radar_crop import cropped_slc_files
 from .water_mask import valid_mask_file
@@ -65,6 +69,10 @@ def dolphin_mask_file(config):
 def build_dolphin_config(config, slc_files, wavelength):
     """Create a validated dolphin ``DisplacementWorkflow`` for the cropped stack.
 
+    All dolphin options come from the config's ``dolphin`` section (merged over
+    the pipeline defaults, see ``dolphin_options.py``); the input files, work
+    directory, water mask and wavelength are added here.
+
     Parameters
     ----------
     config : PipelineConfig
@@ -79,38 +87,9 @@ def build_dolphin_config(config, slc_files, wavelength):
     """
     from dolphin.workflows.config import DisplacementWorkflow
 
-    options = config.dolphin
-    run_dolphin_inversion = config.mintpy.inversion == INVERSION_BY_DOLPHIN
-    return DisplacementWorkflow(
-        cslc_file_list=[str(path) for path in slc_files],
-        mask_file=dolphin_mask_file(config),
-        work_directory=config.dolphin_dir,
-        input_options={"wavelength": wavelength, "cslc_date_fmt": "%Y%m%d"},
-        output_options={
-            "strides": {"x": options.strides_x, "y": options.strides_y},
-            "add_overviews": False,
-        },
-        phase_linking={
-            "ministack_size": options.ministack_size,
-            "half_window": {"x": options.half_window_x, "y": options.half_window_y},
-            "shp_method": options.shp_method,
-        },
-        interferogram_network={"max_bandwidth": options.max_bandwidth},
-        unwrap_options={
-            "run_unwrap": True,
-            "unwrap_method": options.unwrap_method,
-            "n_parallel_jobs": options.n_parallel_unwrap,
-            "snaphu_options": {"ntiles": options.snaphu_ntiles},
-        },
-        timeseries_options={
-            "run_inversion": run_dolphin_inversion,
-            "run_velocity": run_dolphin_inversion,
-        },
-        worker_settings={
-            "threads_per_worker": options.threads_per_worker,
-            "block_shape": options.block_shape,
-        },
-    )
+    options = apply_inversion_mode(config.dolphin.options, config.dolphin_inverts)
+    return DisplacementWorkflow.model_validate(build_workflow_options(
+        options, slc_files, config.dolphin_dir, dolphin_mask_file(config), wavelength))
 
 
 def run_dolphin(config):

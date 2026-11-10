@@ -42,7 +42,7 @@ def rewrite(path, update):
 def test_minimal_config_loads_with_defaults(minimal_config):
     config = load_config(minimal_config)
     assert config.dolphin.strides_x == 4
-    assert config.mintpy.inversion == "mintpy"
+    assert config.inversion == "mintpy" and not config.dolphin_inverts
     assert config.isce_dir == config.paths.work_dir / "isce"
 
 
@@ -69,20 +69,33 @@ def test_missing_dem_vertical_datum_is_rejected(minimal_config):
 
 
 def test_invalid_inversion_mode_is_rejected(minimal_config):
-    rewrite(minimal_config, lambda c: c.update({"mintpy": {"inversion": "both"}}))
+    rewrite(minimal_config, lambda c: c.update({"inversion": "both"}))
     with pytest.raises(ConfigError, match="inversion"):
+        load_config(minimal_config)
+
+
+def test_top_level_inversion_switches_dolphin_time_series_on(minimal_config):
+    rewrite(minimal_config, lambda c: c.update({"inversion": "dolphin"}))
+    config = load_config(minimal_config)
+    assert config.dolphin_inverts
+    assert config.dolphin.options["timeseries_options"]["run_inversion"] is True
+
+
+def test_inversion_inside_mintpy_section_points_to_top_level(minimal_config):
+    rewrite(minimal_config, lambda c: c.update({"mintpy": {"inversion": "dolphin"}}))
+    with pytest.raises(ConfigError, match="top level"):
         load_config(minimal_config)
 
 
 def test_mintpy_options_use_original_names_in_file_order(minimal_config):
     rewrite(minimal_config, lambda c: c.update({"mintpy": {
-        "inversion": "mintpy",
+        "dolphin_temporal_coherence_threshold": 0.5,
         "mintpy.compute.numWorker": "all",
         "mintpy.networkInversion.maskDataset": "connectComponent",
         "mintpy.deramp": "quadratic",
     }}))
     config = load_config(minimal_config)
-    assert config.mintpy.inversion == "mintpy"
+    assert config.mintpy.dolphin_temporal_coherence_threshold == 0.5
     options = build_template_options(config.mintpy)
     assert list(options) == ["mintpy.load.processor", "mintpy.compute.numWorker",
                              "mintpy.networkInversion.maskDataset", "mintpy.deramp"]
@@ -136,10 +149,33 @@ def test_mintpy_values_reach_the_template_unchanged(minimal_config, yaml_value, 
 
 
 def test_other_sections_still_read_numbers(minimal_config):
-    rewrite(minimal_config, lambda c: c.update({"dolphin": {"strides_x": 2},
+    rewrite(minimal_config, lambda c: c.update({"dolphin": {"output_options": {"strides": {"x": 2}}},
                                                 "water_mask": {"max_water_fraction": 0.5}}))
     config = load_config(minimal_config)
     assert config.dolphin.strides_x == 2 and config.water_mask.max_water_fraction == 0.5
+
+
+def test_dolphin_options_in_dolphin_structure_reach_the_config(minimal_config):
+    rewrite(minimal_config, lambda c: c.update({"dolphin": {
+        "phase_linking": {"half_window": {"x": 7}},
+        "unwrap_options": {"snaphu_options": {"ntiles": [2, 2]}},
+    }}))
+    options = load_config(minimal_config).dolphin.options
+    assert options["phase_linking"]["half_window"] == {"x": 7, "y": 5}
+    assert options["unwrap_options"]["snaphu_options"]["ntiles"] == [2, 2]
+    assert options["timeseries_options"]["run_inversion"] is False   # mintpy mode
+
+
+def test_invalid_dolphin_option_fails_at_load(minimal_config):
+    rewrite(minimal_config, lambda c: c.update({"dolphin": {"output_options": {"strides": {"x": 0}}}}))
+    with pytest.raises(ConfigError, match="strides"):
+        load_config(minimal_config)
+
+
+def test_old_dolphin_option_name_points_to_new_path(minimal_config):
+    rewrite(minimal_config, lambda c: c.update({"dolphin": {"n_parallel_unwrap": 4}}))
+    with pytest.raises(ConfigError, match="unwrap_options.n_parallel_jobs"):
+        load_config(minimal_config)
 
 
 def test_old_option_name_points_to_mintpy_name(minimal_config):

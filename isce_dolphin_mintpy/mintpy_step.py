@@ -1,6 +1,6 @@
 """Stage 4b: run MintPy on the converted dolphin results.
 
-Two modes (config ``mintpy.inversion``):
+Two modes (top-level config option ``inversion``):
 
 ``mintpy`` (default)
     MintPy inverts dolphin's interferogram network (modify_network ...
@@ -28,7 +28,6 @@ import shutil
 import h5py
 import numpy as np
 
-from .config import INVERSION_BY_DOLPHIN
 from .mintpy_inputs import DOLPHIN_TEMPORAL_COHERENCE_FILE, prepare_mintpy_inputs
 from .mintpy_template import (
     is_plotting_enabled,
@@ -248,7 +247,7 @@ def run_mintpy(config):
     CommandFailedError
         If a MintPy command fails (details in ``logs/mintpy.log``).
     """
-    use_dolphin_series = config.mintpy.inversion == INVERSION_BY_DOLPHIN
+    use_dolphin_series = config.dolphin_inverts
     config.mintpy_dir.mkdir(parents=True, exist_ok=True)
     prepare_mintpy_inputs(config, include_dolphin_timeseries=use_dolphin_series)
     check_reference_date_in_stack(config.mintpy_dir, config.mintpy.template_options)

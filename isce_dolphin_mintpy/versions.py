@@ -14,7 +14,8 @@ from pathlib import Path
 VERSIONS_FILE = "versions.json"
 # Set in the Docker image from the git commit it was built from.
 GIT_COMMIT_VARIABLE = "PIPELINE_GIT_COMMIT"
-PACKAGES = ("dolphin", "mintpy", "snaphu", "pyaps3", "numpy", "gdal")
+# Distribution names (pip/conda), e.g. whirlwind-insar provides the module "whirlwind".
+PACKAGES = ("dolphin", "mintpy", "snaphu", "whirlwind-insar", "pyaps3", "numpy", "gdal")
 
 
 def pipeline_version():

@@ -9,7 +9,7 @@ in the same folder, and every option that is not given keeps MintPy's default.
 Example (YAML)::
 
     mintpy:
-      inversion: mintpy                          # pipeline option
+      dolphin_temporal_coherence_threshold: 0.6  # pipeline option
       mintpy.compute.cluster: local              # MintPy option
       mintpy.reference.lalo: 48.1977, 16.3254
 """

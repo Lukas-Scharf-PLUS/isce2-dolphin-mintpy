@@ -22,7 +22,8 @@ mamba env create -f environment.yml
 conda activate isce2-dolphin-mintpy
 ```
 
-The environment contains only `isce2`, `dolphin`, `snaphu`, `mintpy`, `pyaps3`, `gdal`, `pyyaml` and `pytest`.
+The environment contains only `isce2`, `dolphin` (0.42.8), `snaphu`, `mintpy`, `pyaps3`, `gdal`, `pyyaml` and `pytest`,
+plus the whirlwind unwrapper `whirlwind-insar==0.10.0` from pip.
 The pipeline looks for the topsStack scripts (`stackSentinel.py`) in this order:
 
 1. `isce.topsstack_dir` in the config.
@@ -54,6 +55,44 @@ python -m isce_dolphin_mintpy run config/test_asc073.yaml --steps crop dolphin m
 Steps: `isce`, `crop`, `dolphin`, `mintpy`. The ISCE2 step can be restarted after an interruption.
 Finished topsStack run files are marked in `isce/run_status/` and skipped.
 Relative paths in the config are resolved against the current directory.
+
+## Configuration
+
+One YAML file describes a run. Start from [config/example.yaml](config/example.yaml), which documents every
+pipeline option.
+
+| Section | What it holds | Option names |
+| --- | --- | --- |
+| `paths` | SLC, orbit and DEM inputs, DEM vertical datum, `work_dir` | pipeline names |
+| `aoi` | area of interest (`bbox` or vector `file`) and buffer | pipeline names |
+| `water_mask` | optional water mask raster and how it is used | pipeline names |
+| `isce` | stackSentinel.py options (reference date, swaths, ESD, parallelism) | pipeline names |
+| `inversion` | a single top-level option, not a section: `mintpy` (MintPy network inversion, default) or `dolphin` (dolphin's time series, MintPy only corrects). It affects both the dolphin and the MintPy step | `mintpy` / `dolphin` |
+| `dolphin` | any dolphin option: phase linking, network, unwrapper (snaphu, whirlwind, ...), time series, workers | dolphin's own nested structure, all listed in [config/dolphin_options_reference.yaml](config/dolphin_options_reference.yaml) |
+| `mintpy` | `dolphin_temporal_coherence_threshold` and any `smallbaselineApp.cfg` option | `mintpy.*` keys with MintPy's original names (`smallbaselineApp.py -H`) |
+
+Checked before ISCE2 starts:
+
+- when the config is loaded:
+  - unknown options in every section, including dolphin options (checked with dolphin's own model) and
+    `mintpy.*` names (checked against MintPy's default templates)
+  - that the chosen unwrapper is installed
+- when the `isce` step is selected: that an explicit `mintpy.reference.date` is an SLC date
+
+Options that only the pipeline may set (input files, work directories, mask, wavelength) give an error with the
+reason. Details are in "How it works": [dolphin](#3-dolphin-dolphin) and [MintPy](#4-mintpy-mintpy).
+
+```yaml
+isce:
+  reference_date: "20220113"
+inversion: mintpy                # top level, between isce and dolphin
+dolphin:
+  unwrap_options:
+    unwrap_method: whirlwind
+mintpy:
+  mintpy.unwrapError.method: bridging+phase_closure
+  mintpy.reference.date: "20220101"
+```
 
 ## Run with Docker
 
@@ -109,7 +148,8 @@ Dockerfile                 container image (micromamba + environment.yml + geoid
 .github/workflows/
   docker.yml               builds, tests and publishes the image to ghcr.io
 config/
-  example.yaml             every option, with explanations and defaults
+  example.yaml             every pipeline option, with explanations and defaults
+  dolphin_options_reference.yaml  every dolphin option with description (generated from dolphin)
   test_asc073.yaml         3-date test over central Vienna (ascending track 73)
 isce_dolphin_mintpy/
   __main__.py              command line entry point
@@ -122,6 +162,7 @@ isce_dolphin_mintpy/
   dem_preparation.py       cuts the DEM, converts geoid -> ellipsoid heights, writes ISCE DEM
   radar_crop.py            step "crop": AOI -> radar pixel window -> VRT windows
   water_mask.py            step "crop": geocoded water mask -> water fraction on dolphin's grid
+  dolphin_options.py       dolphin section of the config -> checked dolphin options (defaults, owned keys)
   dolphin_step.py          step "dolphin": writes dolphin config, runs dolphin
   mintpy_inputs.py         dolphin outputs + ISCE2 metadata -> MintPy HDF5 inputs
   mintpy_template.py       mintpy.* options of the config -> checked MintPy template file
@@ -217,10 +258,47 @@ at any threshold.
 
 ### 3. dolphin (`dolphin`)
 
-The config is built with dolphin's own `DisplacementWorkflow` class, so dolphin validates every option.
-It is saved as `dolphin/dolphin_config.yaml`. The radar wavelength comes from the ISCE2 reference XML.
-dolphin runs phase linking, forms a nearest-neighbour interferogram network (`max_bandwidth`)
-and unwraps it with SNAPHU.
+dolphin runs phase linking, forms the interferogram network (by default each date with its 3 nearest
+neighbours) and unwraps it with SNAPHU or whirlwind.
+
+**dolphin options in the config.** The `dolphin` section uses dolphin's own config structure, with the same
+names and nesting as a dolphin YAML file. Every dolphin option can be set there:
+
+```yaml
+dolphin:
+  output_options:
+    strides: {x: 4, y: 1}
+  unwrap_options:
+    unwrap_method: whirlwind
+    n_parallel_jobs: -1
+    whirlwind_options:
+      num_threads: 8
+```
+
+- [config/dolphin_options_reference.yaml](config/dolphin_options_reference.yaml) lists every option with its
+  description and this pipeline's default. Copy the parts you need. The file is generated from dolphin itself;
+  its header shows how to regenerate it after a dolphin update.
+- Your options are merged key by key over the pipeline defaults (`PIPELINE_DEFAULT_OPTIONS` in
+  `dolphin_options.py`). Setting `unwrap_options.unwrap_method` therefore keeps the default `snaphu_options`.
+- The pipeline always sets `cslc_file_list`, `work_directory`, `mask_file` (from `water_mask`),
+  `input_options.wavelength` (from the ISCE2 reference XML) and `input_options.cslc_date_fmt`. Setting them in the
+  config gives an error. `unwrap_options.run_unwrap` cannot be `false`, because MintPy needs unwrapped
+  interferograms.
+- `timeseries_options.run_inversion`/`run_velocity` follow the top-level `inversion` option. In `mintpy` mode you can still set
+  them to `true` to get dolphin's time series as well, for comparison.
+- When the config is loaded, the options are checked with dolphin's own model. A typo, a wrong type or an invalid
+  choice stops the run before ISCE2 starts. The pipeline also checks that the Python module of the chosen
+  unwrapper is installed. Otherwise dolphin would only fail after phase linking.
+- The old flat names (`strides_x`, `unwrap_method`, `n_parallel_unwrap`, ...) give an error that names the new path.
+
+The complete config is saved as `dolphin/dolphin_config.yaml`.
+
+**whirlwind** comes from the pip package `whirlwind-insar==0.10.0`, the same version as the compass-dolphin
+pipeline. The PyPI package named `whirlwind` is unrelated. dolphin is pinned to 0.42.8, whose whirlwind backend was
+tested with it. Test on the 3-date stack (20220101_20220125): the whirlwind result is congruent with the wrapped
+phase, and after removing a constant it differs from SNAPHU by more than π on 0.35 % of the pixels.
+whirlwind shares one thread pool (`whirlwind_options.num_threads`, `null` = all CPUs) across the
+`n_parallel_jobs` interferograms it unwraps at the same time.
 
 ### 4. MintPy (`mintpy`)
 
@@ -244,7 +322,7 @@ It derives `X_FIRST`/`Y_FIRST` from the GeoTIFF, decides the data are geocoded, 
 It was used as a reference, but it is not a dependency. It hardcodes satellite height, earth radius and
 azimuth pixel size, and it sets `PROCESSOR=hyp3` temporarily. This pipeline takes those values from the ISCE2 metadata.
 
-**Two inversion modes** (`mintpy.inversion`):
+**Two inversion modes** (top-level option `inversion`, written after the `isce` section):
 
 | Mode | Time series from | What MintPy does |
 | --- | --- | --- |
@@ -256,15 +334,26 @@ coherence ≥ `dolphin_temporal_coherence_threshold`. This is needed because pha
 almost no closure phase, so MintPy's own temporal coherence is close to 1 nearly everywhere and hardly filters
 anything. In `dolphin` mode, dolphin's temporal coherence becomes MintPy's `temporalCoherence.h5`.
 
-**MintPy options in the config.** The `mintpy` section works like a custom MintPy template. Besides the two
-pipeline options (`inversion`, `dolphin_temporal_coherence_threshold`), every key that starts with `mintpy.` is an
+The option also sets dolphin's `timeseries_options.run_inversion`/`run_velocity`. In `dolphin` mode they are always
+`true`. In `mintpy` mode they are `false` by default, so `dolphin/timeseries/` does not exist. Rerun dolphin when
+you switch modes (`--steps dolphin mintpy`); ISCE2 and crop do not need to run again. In `dolphin` mode, unwrapping
+errors are not corrected, because `correct_unwrap_error` only changes the interferograms before MintPy's inversion.
+To compare both inversions, stay in `mintpy` mode and let dolphin write its time series as well:
+
+```yaml
+inversion: mintpy        # MintPy's inversion is used; dolphin's is in dolphin/timeseries/
+dolphin:
+  timeseries_options: {run_inversion: true, run_velocity: true}
+```
+
+**MintPy options in the config.** The `mintpy` section works like a custom MintPy template. Besides the
+pipeline option `dolphin_temporal_coherence_threshold`, every key that starts with `mintpy.` is an
 original `smallbaselineApp.cfg` option. These options are written unchanged, in file order, to
 `mintpy/isce_dolphin_mintpy.cfg`. MintPy then merges them into its full `mintpy/smallbaselineApp.cfg`, and every
 option you leave out keeps MintPy's default (`auto`):
 
 ```yaml
 mintpy:
-  inversion: mintpy
   dolphin_temporal_coherence_threshold: 0.6
   mintpy.compute.cluster: local
   mintpy.reference.lalo: 48.19767391928604, 16.325432508158606
