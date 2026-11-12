@@ -21,8 +21,10 @@ How a variant folder is prepared (``prepare_variant_dir``):
   ...) are *copied*, because MintPy's ``reference_date`` step rewrites every
   time series file of its folder in place. Symlinks would let a variant change
   the main run's files.
-- ``inputs/`` and all other HDF5 files of the main folder (masks, coherence)
-  are only read by the later steps, so they are symlinked. Weather model delays
+- ``inputs/`` and the other HDF5 files of the main folder (masks, coherence)
+  are only read by the later steps, so they are symlinked (only the files in
+  ``SHARED_READ_ONLY_FILES``). Results of the per-run steps (``velocity.h5``,
+  ``demErr.h5``, ``timeseries*.h5``) are never linked. Weather model delays
   that MintPy writes to ``inputs/`` (e.g. ``inputs/ERA5.h5``) are therefore
   computed once and reused by every run with the same model.
 """
@@ -57,7 +59,23 @@ VARIANT_OPTION_PREFIXES = (
 # correct_LOD (_LOD), correct_SET (_SET) and correct_ionosphere (_ion), in
 # MintPy's naming, e.g. timeseries_SET_ion.h5.
 SHARED_TIMESERIES_PATTERN = re.compile(r"^timeseries(_(LOD|SET|ion))*\.h5$")
-TIMESERIES_PREFIX = "timeseries"
+# Files of the shared steps that the per-run steps only read: masks for deramp
+# and residual_RMS, coherence for geocode, the rest for MintPy's plots. Only
+# these are linked. A result of a per-run step (velocity.h5, demErr.h5,
+# timeseriesResidual.h5, ...) must never be linked: the main folder still holds
+# it from an earlier run, and MintPy would write the variant's result through
+# the link into the main run's file. A list of allowed files is used because a
+# missing entry makes MintPy fail visibly, while a missing exclusion would not.
+SHARED_READ_ONLY_FILES = (
+    "maskTempCoh.h5",
+    "maskConnComp.h5",
+    "waterMask.h5",
+    "temporalCoherence.h5",
+    "avgSpatialCoh.h5",
+    "avgPhaseVelocity.h5",
+    "numInvIfgram.h5",
+    "numTriNonzeroIntAmbiguity.h5",
+)
 INPUTS_DIR_NAME = "inputs"
 
 
@@ -158,6 +176,11 @@ def prepare_variant_dir(mintpy_dir, target_dir):
     if not (mintpy_dir / INPUTS_DIR_NAME).is_dir():
         raise FileNotFoundError(f"{mintpy_dir / INPUTS_DIR_NAME} is missing.")
     target_dir.mkdir(parents=True, exist_ok=True)
+    # Links of an earlier preparation are made again below; removing them all
+    # first also drops links that must not exist (any more), see SHARED_READ_ONLY_FILES.
+    for old_link in target_dir.iterdir():
+        if old_link.is_symlink():
+            old_link.unlink()
 
     _replace_with_symlink(target_dir / INPUTS_DIR_NAME, mintpy_dir / INPUTS_DIR_NAME)
     for source in sorted(mintpy_dir.glob("*.h5")):
@@ -165,8 +188,7 @@ def prepare_variant_dir(mintpy_dir, target_dir):
             # copyfile (not copy2) gives the copy a new modification time, so
             # MintPy sees its later outputs as outdated and recomputes them.
             shutil.copyfile(source, target_dir / source.name)
-        elif not source.name.startswith(TIMESERIES_PREFIX):
-            # Masks, coherence, etc.: read-only for the later steps.
+        elif source.name in SHARED_READ_ONLY_FILES:
             _replace_with_symlink(target_dir / source.name, source)
     logger.info("Variant folder prepared: %s", target_dir)
 

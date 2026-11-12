@@ -60,6 +60,15 @@ def test_main_run_is_kept_on_a_tie():
     assert selected == "main"
 
 
+def test_rounding_noise_counts_as_a_tie():
+    # Seen with 3 dates: the temporal model fits exactly, residuals are ~1e-9 m.
+    rms = {"main": {"d1": 1.9e-9, "d2": 2.4e-9}, "other": {"d1": 1.8e-9, "d2": 2.3e-9}}
+    selected, scores = variant_comparison.compare_runs(rms)
+    assert selected == "main"
+    assert scores["other"]["dates_better_than_main"] == 0
+    assert scores["main"]["dates_lowest_rms"] == 2
+
+
 def test_median_velocity_std_uses_the_mask(tmp_path):
     write_velocity_and_mask(tmp_path, [[0.001, 0.002], [0.003, 1.0]], [[1, 1], [1, 0]])
     assert variant_comparison.median_velocity_std(tmp_path) == pytest.approx(2.0)

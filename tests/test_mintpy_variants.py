@@ -59,7 +59,8 @@ def make_main_folder(mintpy_dir):
     """Create a fake main MintPy folder after the shared steps."""
     (mintpy_dir / "inputs").mkdir(parents=True)
     for name in ("timeseries.h5", "timeseries_SET.h5", "timeseries_SET_ERA5.h5",
-                 "timeseriesResidual.h5", "maskTempCoh.h5", "temporalCoherence.h5"):
+                 "timeseriesResidual.h5", "velocity.h5", "demErr.h5",
+                 "maskTempCoh.h5", "temporalCoherence.h5"):
         (mintpy_dir / name).write_text(name)
 
 
@@ -73,9 +74,21 @@ def test_variant_folder_copies_time_series_and_links_the_rest(tmp_path):
         assert (target / name).is_file() and not (target / name).is_symlink()
     for name in ("inputs", "maskTempCoh.h5", "temporalCoherence.h5"):
         assert (target / name).is_symlink()
-    # Results of the main run's per-run steps are not taken over.
-    assert not (target / "timeseries_SET_ERA5.h5").exists()
-    assert not (target / "timeseriesResidual.h5").exists()
+    # Results of the main run's per-run steps are not taken over: a link would let
+    # the variant write its result into the main run's file.
+    for name in ("timeseries_SET_ERA5.h5", "timeseriesResidual.h5", "velocity.h5", "demErr.h5"):
+        assert not (target / name).exists()
+
+
+def test_old_link_to_a_main_result_is_removed(tmp_path):
+    make_main_folder(tmp_path)
+    target = mintpy_variants.variant_dir(tmp_path, "no_tropo")
+    target.mkdir(parents=True)
+    (target / "velocity.h5").symlink_to(tmp_path / "velocity.h5")
+
+    mintpy_variants.prepare_variant_dir(tmp_path, target)
+
+    assert not (target / "velocity.h5").exists()
 
 
 def test_preparing_twice_replaces_links_and_copies(tmp_path):

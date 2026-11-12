@@ -37,6 +37,10 @@ VELOCITY_STD_DATASET = "velocityStd"
 MASK_FILE_NAME = "maskTempCoh.h5"
 METERS_TO_MILLIMETERS = 1000.0
 DECIMALS = 3
+# RMS differences up to this size count as equal (0.01 mm, far below what a
+# correction changes). Without it, rounding noise (e.g. 1.8e-9 vs 1.9e-9 m when
+# the temporal model fits a short series exactly) would pick a "better" run.
+RMS_TIE_TOLERANCE_M = 1.0e-5
 
 
 class VariantComparisonError(RuntimeError):
@@ -108,8 +112,9 @@ def compare_runs(residual_rms_by_run):
     tuple[str, dict]
         ``(selected_run, scores)`` where ``scores[run]`` holds
         ``median_residual_rms``, ``dates_lowest_rms`` and
-        ``dates_better_than_main`` (``None`` for the main run). On equal
-        medians the earlier run wins, so the main run is kept on a tie.
+        ``dates_better_than_main`` (``None`` for the main run). Differences
+        up to ``RMS_TIE_TOLERANCE_M`` count as a tie and a tie goes to the
+        earlier run, so a variant must be clearly better to replace the main run.
 
     Raises
     ------
@@ -129,14 +134,29 @@ def compare_runs(residual_rms_by_run):
             "median_residual_rms": statistics.median(rms[date] for date in common_dates),
             "dates_lowest_rms": 0,
             "dates_better_than_main": None if name == main_name else sum(
-                rms[date] < residual_rms_by_run[main_name][date] for date in common_dates),
+                _is_clearly_lower(rms[date], residual_rms_by_run[main_name][date])
+                for date in common_dates),
         }
     for date in common_dates:
-        best = min(run_names, key=lambda name: residual_rms_by_run[name][date])
+        best = _first_lowest(run_names, lambda name: residual_rms_by_run[name][date])
         scores[best]["dates_lowest_rms"] += 1
 
-    selected = min(run_names, key=lambda name: scores[name]["median_residual_rms"])
+    selected = _first_lowest(run_names, lambda name: scores[name]["median_residual_rms"])
     return selected, scores
+
+
+def _is_clearly_lower(value, reference):
+    """Return True if ``value`` is lower than ``reference`` by more than the tie tolerance."""
+    return value < reference - RMS_TIE_TOLERANCE_M
+
+
+def _first_lowest(run_names, value_of):
+    """Return the run with the lowest value; a later run must be clearly lower to win."""
+    best = run_names[0]
+    for name in run_names[1:]:
+        if _is_clearly_lower(value_of(name), value_of(best)):
+            best = name
+    return best
 
 
 def write_comparison(run_dirs, output_file, variant_options):
