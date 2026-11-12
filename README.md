@@ -69,7 +69,7 @@ pipeline option.
 | `isce` | stackSentinel.py options (reference date, swaths, ESD, parallelism) | pipeline names |
 | `inversion` | a single top-level option, not a section: `mintpy` (MintPy network inversion, default) or `dolphin` (dolphin's time series, MintPy only corrects). It affects both the dolphin and the MintPy step | `mintpy` / `dolphin` |
 | `dolphin` | any dolphin option: phase linking, network, unwrapper (snaphu, whirlwind, ...), time series, workers | dolphin's own nested structure, all listed in [config/dolphin_options_reference.yaml](config/dolphin_options_reference.yaml) |
-| `mintpy` | `dolphin_temporal_coherence_threshold` and any `smallbaselineApp.cfg` option | `mintpy.*` keys with MintPy's original names (`smallbaselineApp.py -H`) |
+| `mintpy` | `dolphin_temporal_coherence_threshold`, optional `variants` (see [Variants](#variants-compare-corrections)) and any `smallbaselineApp.cfg` option | `mintpy.*` keys with MintPy's original names (`smallbaselineApp.py -H`) |
 
 Checked before ISCE2 starts:
 
@@ -167,6 +167,8 @@ isce_dolphin_mintpy/
   mintpy_inputs.py         dolphin outputs + ISCE2 metadata -> MintPy HDF5 inputs
   mintpy_template.py       mintpy.* options of the config -> checked MintPy template file
   mintpy_step.py           step "mintpy": smallbaselineApp.py runs, step by step with plots
+  mintpy_variants.py       mintpy.variants: checks options, prepares mintpy/variants/<name>/
+  variant_comparison.py    compares main run and variants by residual RMS -> variant_comparison.json
 tests/                     unit tests (one test_<module>.py per module)
 runs/                      processing output of local runs (git-ignored)
 ```
@@ -178,6 +180,8 @@ isce/      ISCE2 topsStack work dir (merged/SLC, merged/geom_reference, referenc
 crop/      VRT windows of the SLCs and geometry for the AOI + crop_window.json
 dolphin/   dolphin work dir (dolphin_config.yaml, interferograms/, unwrapped/, timeseries/)
 mintpy/    MintPy work dir (inputs/, timeseries*.h5, velocity.h5, geo/, pic/ = figures of all steps)
+  variants/<name>/          one MintPy folder per variant (only with mintpy.variants)
+  variant_comparison.json   comparison of the main run and the variants
 logs/      pipeline.log and one log per external command
 ```
 
@@ -396,6 +400,59 @@ number of triplets per pixel whose unwrapped closure phase is a non-zero multipl
 wrapped closure phase is zero, so any non-zero count comes from an unwrapping error. When the count is 0
 everywhere, MintPy 1.6 crashes while plotting the histogram ("`bins` must be positive"). The pipeline logs a
 warning in that case and continues. Any other failure of that step stops the run.
+
+#### Variants: compare corrections
+
+To compare, for example, the result with and without the ERA5 tropospheric correction in one unattended run (such
+as in Argo), list *variants* in the `mintpy` section. A variant is a name plus the `mintpy.*` options that change:
+
+```yaml
+mintpy:
+  mintpy.troposphericDelay.method: pyaps        # main run: ERA5
+  variants:
+    no_tropo: {mintpy.troposphericDelay.method: "no"}
+    opera:    {mintpy.troposphericDelay.method: opera}
+```
+
+How it runs:
+
+1. Everything up to and including `correct_ionosphere` runs once in `mintpy/`. Those steps are the same for all runs.
+2. A folder `mintpy/variants/<name>/` is prepared for each variant. The time series files written so far
+   (`timeseries.h5`, `timeseries_SET.h5`, ...) are **copied**, because MintPy's `reference_date` step rewrites
+   every time series file of its folder in place. `inputs/` and the masks are symlinked. A weather model delay
+   such as `inputs/ERA5.h5` is therefore computed only once.
+3. The main run continues with `correct_troposphere` ... `hdfeos5`. Then every variant runs the same steps in its
+   folder with its options on top of the main options. Their logs are in `logs/mintpy_<name>.log`.
+4. `variant_comparison.py` compares all runs and writes `mintpy/variant_comparison.json`.
+
+Only options of the steps from `correct_troposphere` on are allowed in a variant (`troposphericDelay`, `deramp`,
+`topographicResidual`, `residualRMS`, `timeFunc`, `geocode`, `save`, `plot`). Other options would act on the
+shared steps and have no effect, so they stop the run when the config is loaded.
+
+**What is compared.** MintPy's `residual_RMS` step writes the spatial RMS of `timeseriesResidual.h5` for each date
+(`rms_timeseriesResidual_ramp.txt`). That residual is the part of the time series that the temporal model of the
+DEM error step (velocity, DEM error, optional periodic terms) cannot explain. Tropospheric noise changes randomly
+from date to date, so it ends up there, and a better correction lowers it. Per run, the report holds:
+
+| Field | Meaning |
+| --- | --- |
+| `median_residual_rms_mm` | median residual RMS over the dates all runs share; **the lowest one is `selected`** (the main run wins a tie) |
+| `dates_lowest_rms` | on how many dates this run has the lowest RMS of all runs |
+| `dates_better_than_main` | on how many dates this run beats the main run |
+| `median_velocity_std_mm_per_year` | median `velocityStd` of `velocity.h5` inside `maskTempCoh.h5` |
+| `excluded_dates` | dates MintPy left out of the velocity fit (`exclude_date.txt`) |
+| `residual_rms_mm` | the residual RMS of every date |
+
+The report selects a run but does not copy its files; use the folder named in `runs.<selected>.directory`.
+Keep in mind when you read it:
+
+- The comparison needs `correct_topography` (`mintpy.topographicResidual` not `"no"`), which writes the residual.
+- Change only what you want to compare. `deramp` or `height_correlation` also lower the RMS, partly by removing
+  real signal (long-wavelength or topography-correlated deformation).
+- Unmodelled seasonal deformation counts as noise. `mintpy.timeFunc.periodic: 1.0` adds an annual term.
+- Each run picks its own `exclude_date.txt` from its RMS values, so `velocityStd` may come from different date
+  sets. Set `mintpy.timeFunc.excludeDate: "no"` (or a fixed list) when you want to compare it.
+- Every variant stores its own copy of the time series files, so disk use grows with the number of variants.
 
 **Plots.** Unless `mintpy.plot: "no"`, every step runs with `--plot`. After each step MintPy draws every result
 file that exists so far into `mintpy/pic/`, for example the network, unwrapped interferograms before and after

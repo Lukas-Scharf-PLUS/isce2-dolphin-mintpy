@@ -179,20 +179,32 @@ def validate_template_options(template_options, defaults_dir=None):
         )
 
 
-def build_template_options(mintpy_config):
+def build_template_options(mintpy_config, overrides=None):
     """Return all options (name -> text value) for the MintPy template of this run.
 
     The fixed pipeline options come first, then the user's options in the
     order of the config file.
+
+    Parameters
+    ----------
+    mintpy_config : MintpyConfig
+    overrides : dict, optional
+        Options of a variant (see ``mintpy_variants.py``). They replace the
+        main run's value of the same option or are added at the end.
     """
     options = dict(FIXED_TEMPLATE_OPTIONS)
     options.update(mintpy_config.template_options)
+    options.update(overrides or {})
     return options
 
 
-def write_template(mintpy_config, template_file):
-    """Write the MintPy template file used for all ``smallbaselineApp.py`` calls."""
-    lines = [f"{key:45s} = {value}" for key, value in build_template_options(mintpy_config).items()]
+def write_template(mintpy_config, template_file, overrides=None):
+    """Write the MintPy template file used for all ``smallbaselineApp.py`` calls.
+
+    ``overrides`` are the options of a variant (see ``build_template_options``).
+    """
+    options = build_template_options(mintpy_config, overrides)
+    lines = [f"{key:45s} = {value}" for key, value in options.items()]
     Path(template_file).write_text("\n".join(lines) + "\n")
 
 

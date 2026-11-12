@@ -15,6 +15,12 @@ Two modes (top-level config option ``inversion``):
     reference point on the interferogram stack, the dolphin time series is
     re-referenced to that point and then goes through the same corrections.
 
+Variants (``mintpy.variants`` in the config): after the shared corrections
+(LOD, SET, ionosphere), every variant reruns the steps from
+``correct_troposphere`` on with its own options in
+``mintpy/variants/<name>/``. All runs are then compared by their residual RMS
+(``variant_comparison.py``, report in ``mintpy/variant_comparison.json``).
+
 In both modes ``load_data`` is never run: the inputs are written by
 ``mintpy_inputs.py``. The MintPy template is written from the ``mintpy.*``
 options of the config (see ``mintpy_template.py``). Unless ``mintpy.plot`` is
@@ -35,7 +41,9 @@ from .mintpy_template import (
     requested_reference_date,
     write_template,
 )
+from .mintpy_variants import MAIN_RUN_NAME, prepare_variant_dir, variant_dir
 from .shell import CommandFailedError, run_command
+from .variant_comparison import COMPARISON_FILE_NAME, write_comparison
 
 logger = logging.getLogger(__name__)
 
@@ -52,34 +60,46 @@ STEPS_BEFORE_INVERSION = ["modify_network", "reference_point", QUICK_OVERVIEW_ST
                           "correct_unwrap_error"]
 # In dolphin mode there is no network inversion, so unwrapping errors are not corrected.
 STEPS_BEFORE_DOLPHIN_SERIES = ["modify_network", "reference_point", QUICK_OVERVIEW_STEP]
-STEPS_AFTER_INVERSION = [
-    "correct_LOD", "correct_SET", "correct_ionosphere", "correct_troposphere", "deramp",
-    "correct_topography", "residual_RMS", "reference_date", "velocity", "geocode",
-    "google_earth", "hdfeos5",
+# Corrections after the inversion that are the same for the main run and all variants.
+SHARED_CORRECTION_STEPS = ["correct_LOD", "correct_SET", "correct_ionosphere"]
+# Steps that run separately for the main run and for each variant (mintpy_variants.py).
+PER_RUN_STEPS = [
+    "correct_troposphere", "deramp", "correct_topography", "residual_RMS", "reference_date",
+    "velocity", "geocode", "google_earth", "hdfeos5",
 ]
+STEPS_AFTER_INVERSION = SHARED_CORRECTION_STEPS + PER_RUN_STEPS
+MINTPY_LOG_NAME = "mintpy"
 
 
 class MintpyStepError(RuntimeError):
     """Raised when the MintPy options do not fit the processed stack."""
 
 
-def run_smallbaseline_step(config, template_file, step):
+def run_smallbaseline_step(config, template_file, step, work_dir=None, log_name=MINTPY_LOG_NAME):
     """Run one ``smallbaselineApp.py`` step with ``--dostep``.
 
     Steps are run individually (instead of ``--start``/``--end``) so that the
     pipeline's own processing can run between them. ``--plot`` makes MintPy
     plot every result file that exists so far into ``pic/`` after the step.
 
+    Parameters
+    ----------
+    work_dir : Path, optional
+        MintPy folder to run in. Default: the main ``config.mintpy_dir``.
+    log_name : str
+        The output goes to ``<log_dir>/<log_name>.log``.
+
     Raises
     ------
     CommandFailedError
         If the step (or its plotting) fails.
     """
-    command = ["smallbaselineApp.py", str(template_file), "--dir", str(config.mintpy_dir),
+    work_dir = work_dir or config.mintpy_dir
+    command = ["smallbaselineApp.py", str(template_file), "--dir", str(work_dir),
                "--dostep", step]
     if is_plotting_enabled(config.mintpy.template_options):
         command.append("--plot")
-    run_command(command, config.log_dir / "mintpy.log", cwd=config.mintpy_dir, echo=True)
+    run_command(command, config.log_dir / f"{log_name}.log", cwd=work_dir, echo=True)
 
 
 def has_no_closure_ambiguity(mintpy_dir):
@@ -99,16 +119,18 @@ def has_no_closure_ambiguity(mintpy_dir):
     return valid.size == 0 or valid.max() == 0
 
 
-def run_steps(config, template_file, steps):
+def run_steps(config, template_file, steps, work_dir=None, log_name=MINTPY_LOG_NAME):
     """Run the given MintPy steps in order.
 
     Only the known histogram crash of ``quick_overview`` is tolerated (see
     ``has_no_closure_ambiguity``); it is logged as a warning. Every other
-    failure stops the pipeline.
+    failure stops the pipeline. ``work_dir`` and ``log_name`` are passed to
+    ``run_smallbaseline_step``.
     """
     for step in steps:
         try:
-            run_smallbaseline_step(config, template_file, step)
+            run_smallbaseline_step(config, template_file, step, work_dir=work_dir,
+                                   log_name=log_name)
         except CommandFailedError:
             if step != QUICK_OVERVIEW_STEP or not has_no_closure_ambiguity(config.mintpy_dir):
                 raise
@@ -265,4 +287,40 @@ def run_mintpy(config):
         if threshold is not None:
             restrict_mask_with_dolphin_coherence(config.mintpy_dir, threshold)
 
-    run_steps(config, template_file, STEPS_AFTER_INVERSION)
+    run_steps(config, template_file, SHARED_CORRECTION_STEPS)
+    # Variant folders copy the shared time series now: the main run's
+    # reference_date step below changes those files in place.
+    variant_dirs = {name: variant_dir(config.mintpy_dir, name) for name in config.mintpy.variants}
+    for path in variant_dirs.values():
+        prepare_variant_dir(config.mintpy_dir, path)
+
+    run_steps(config, template_file, PER_RUN_STEPS)
+    if variant_dirs:
+        run_variants_and_compare(config, variant_dirs)
+
+
+def run_variants_and_compare(config, variant_dirs):
+    """Run the per-run steps in every variant folder, then compare all runs.
+
+    Parameters
+    ----------
+    config : PipelineConfig
+    variant_dirs : dict
+        ``{variant_name: prepared_folder}`` (see ``mintpy_variants.prepare_variant_dir``).
+
+    Raises
+    ------
+    CommandFailedError
+        If a MintPy step of a variant fails (details in ``logs/mintpy_<name>.log``).
+    VariantComparisonError
+        If a run has no residual RMS to compare.
+    """
+    for name, path in variant_dirs.items():
+        logger.info("MintPy variant '%s': %s", name, config.mintpy.variants[name])
+        template_file = path / TEMPLATE_FILE
+        write_template(config.mintpy, template_file, overrides=config.mintpy.variants[name])
+        run_steps(config, template_file, PER_RUN_STEPS, work_dir=path,
+                  log_name=f"{MINTPY_LOG_NAME}_{name}")
+
+    run_dirs = {MAIN_RUN_NAME: config.mintpy_dir, **variant_dirs}
+    write_comparison(run_dirs, config.mintpy_dir / COMPARISON_FILE_NAME, config.mintpy.variants)

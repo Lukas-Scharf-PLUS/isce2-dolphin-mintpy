@@ -23,6 +23,7 @@ from .mintpy_template import (
     split_mintpy_section,
     validate_template_options,
 )
+from .mintpy_variants import parse_variants
 
 # Network modes that MintPy can invert (see mintpy_step.py).
 INVERSION_BY_MINTPY = "mintpy"
@@ -152,6 +153,9 @@ class MintpyConfig:
 
     - Pipeline option ``dolphin_temporal_coherence_threshold``: adds dolphin's
       phase-linking quality to MintPy's pixel mask (``null`` = off).
+    - Pipeline option ``variants``: named sets of ``mintpy.*`` options for the
+      steps from ``correct_troposphere`` on, run next to the main run and
+      compared with it (see ``mintpy_variants.py``).
     - MintPy template options: every key that starts with ``mintpy.``, using the
       original names from MintPy's ``smallbaselineApp.cfg``. They are kept in
       ``template_options`` (in file order) and written to the MintPy template
@@ -164,6 +168,9 @@ class MintpyConfig:
 
     dolphin_temporal_coherence_threshold: Optional[float] = 0.6
     template_options: dict = field(default_factory=dict)
+    # {variant_name: {mintpy_option: value}}: runs from correct_troposphere on with
+    # other options, then compared with the main run (see mintpy_variants.py).
+    variants: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -272,6 +279,8 @@ def _build_mintpy_section(values):
     try:
         pipeline_options, template_options = split_mintpy_section(values)
         validate_template_options(template_options)
+        if "variants" in pipeline_options:
+            pipeline_options["variants"] = parse_variants(pipeline_options["variants"])
     except ValueError as error:
         raise ConfigError(f"Section 'mintpy': {error}") from error
     if "template_options" in pipeline_options:

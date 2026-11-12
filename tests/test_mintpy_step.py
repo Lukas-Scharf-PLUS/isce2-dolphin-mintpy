@@ -23,7 +23,7 @@ def fake_config(mintpy_dir):
 
 def failing_step(failing_name, calls):
     """Return a replacement for run_smallbaseline_step that fails on one step."""
-    def run(config, template_file, step):
+    def run(config, template_file, step, **kwargs):
         calls.append(step)
         if step == failing_name:
             raise CommandFailedError(f"{step} failed")
@@ -33,6 +33,31 @@ def failing_step(failing_name, calls):
 def test_quick_overview_runs_before_unwrapping_error_correction():
     steps = mintpy_step.STEPS_BEFORE_INVERSION
     assert steps.index("quick_overview") < steps.index("correct_unwrap_error")
+
+
+def test_variants_start_at_the_troposphere_correction():
+    assert mintpy_step.PER_RUN_STEPS[0] == "correct_troposphere"
+    assert mintpy_step.STEPS_AFTER_INVERSION[-len(mintpy_step.PER_RUN_STEPS):] == mintpy_step.PER_RUN_STEPS
+
+
+def test_variants_run_in_their_folder_and_are_compared(tmp_path, monkeypatch):
+    variant_folder = tmp_path / "variants" / "no_tropo"
+    variant_folder.mkdir(parents=True)
+    calls, compared = [], {}
+    monkeypatch.setattr(mintpy_step, "run_smallbaseline_step",
+                        lambda config, template, step, work_dir=None, log_name=None:
+                        calls.append((step, work_dir, log_name)))
+    monkeypatch.setattr(mintpy_step, "write_comparison",
+                        lambda run_dirs, output_file, options: compared.update(run_dirs))
+    config = SimpleNamespace(mintpy_dir=tmp_path, mintpy=SimpleNamespace(
+        template_options={}, variants={"no_tropo": {"mintpy.troposphericDelay.method": "no"}}))
+
+    mintpy_step.run_variants_and_compare(config, {"no_tropo": variant_folder})
+
+    assert [step for step, _, _ in calls] == mintpy_step.PER_RUN_STEPS
+    assert {(work_dir, log_name) for _, work_dir, log_name in calls} == {(variant_folder, "mintpy_no_tropo")}
+    assert "mintpy.troposphericDelay.method" in (variant_folder / mintpy_step.TEMPLATE_FILE).read_text()
+    assert compared == {"main": tmp_path, "no_tropo": variant_folder}
 
 
 def test_quick_overview_crash_without_ambiguity_is_tolerated(tmp_path, monkeypatch):

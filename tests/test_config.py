@@ -189,3 +189,19 @@ def test_non_numeric_min_temporal_coherence_is_rejected(minimal_config):
         {"mintpy": {"mintpy.networkInversion.minTempCoh": "high"}}))
     with pytest.raises(ConfigError, match="minTempCoh"):
         load_config(minimal_config)
+
+
+def test_mintpy_variants_are_loaded(minimal_config):
+    rewrite(minimal_config, lambda c: c.update({"mintpy": {
+        "mintpy.troposphericDelay.method": "pyaps",
+        "variants": {"no_tropo": {"mintpy.troposphericDelay.method": "no"}}}}))
+    config = load_config(minimal_config)
+    assert config.mintpy.variants == {"no_tropo": {"mintpy.troposphericDelay.method": "no"}}
+    assert "variants" not in config.mintpy.template_options
+
+
+def test_mintpy_variant_with_shared_step_option_is_rejected(minimal_config):
+    rewrite(minimal_config, lambda c: c.update({"mintpy": {
+        "variants": {"x": {"mintpy.unwrapError.method": "bridging"}}}}))
+    with pytest.raises(ConfigError, match="variants|Variant"):
+        load_config(minimal_config)

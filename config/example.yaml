@@ -100,3 +100,12 @@ mintpy:
   mintpy.reference.date: "20220101"                  # must be an acquisition date of the stack (checked early)
   ## plot
   mintpy.plot: "yes"                                 # figures of every step in <work_dir>/mintpy/pic/
+
+  # --- variants (pipeline option, optional) ---
+  # Rerun the steps from correct_troposphere on with other options and compare them with the run above.
+  # Each variant runs in <work_dir>/mintpy/variants/<name>/; only options of those steps are allowed
+  # (troposphericDelay, deramp, topographicResidual, residualRMS, timeFunc, geocode, save, plot).
+  # Result: <work_dir>/mintpy/variant_comparison.json (per-date residual RMS, selected run).
+  # variants:
+  #   no_tropo: {mintpy.troposphericDelay.method: "no"}
+  #   opera:    {mintpy.troposphericDelay.method: opera}   # needs an Earthdata login in ~/.netrc
