@@ -33,8 +33,13 @@ logger = logging.getLogger(__name__)
 GEOMETRY_LAYERS = ("lat", "lon", "hgt", "los", "shadowMask", "incLocal")
 
 # File name suffixes tried when looking for an ISCE raster, full resolution first.
-# topsStack writes "<name>.full" when multilooking is on, and "<name>" otherwise.
-ISCE_RASTER_SUFFIXES = (".full.vrt", ".full", ".vrt", "")
+# mergeBursts writes the full-resolution mosaic as "<name>.full" (a real binary)
+# and next to it "<name>.full.vrt", which is NOT a header for that binary but a
+# mosaic of the burst files. For the reference date those bursts are VRTs into the
+# raw Sentinel-1 .SAFE/.zip, for secondary dates they live in coreg_secondarys/.
+# The binary is therefore tried first, so that later steps need neither the raw
+# SLCs nor the burst folders. "<name>" is the multilooked version (if any).
+ISCE_RASTER_SUFFIXES = (".full", ".full.vrt", ".vrt", "")
 
 RUN_FILE_PATTERN = re.compile(r"run_(\d+)_")
 

@@ -232,6 +232,20 @@ geocoded input. For ISCE2's radar-coordinate stack the pipeline crops instead:
 3. It writes GDAL VRT files that point into the ISCE2 rasters. One VRT is written per SLC and per geometry
    layer. No data is copied. dolphin then processes only the AOI.
 
+The VRTs point to the merged full-resolution binaries `merged/SLC/<date>/<date>.slc.full` and
+`merged/geom_reference/<layer>.rdr.full`, not to the `*.full.vrt` files next to them. Those are mosaics of the
+burst files: for secondary dates they read `coreg_secondarys/`, and for the reference date they read the raw
+`.SAFE`/`.zip` through `reference/IW*/burst_*.slc.vrt`.
+
+From `crop` on, the pipeline only reads these parts of `isce/`: `merged/SLC`, `merged/geom_reference`,
+`reference/IW*.xml` and `baselines/`. It does not read the raw SLCs, the orbit files, `secondarys/`,
+`coreg_secondarys/` or the burst-level `geom_reference/`. This was tested by running `crop`, `dolphin` and
+`mintpy` on a copy of the test run that held only those folders, with the raw SLC and orbit folders renamed.
+The ISCE2 steps themselves still need all of it.
+
+Note: `paths.slc_dir` and `paths.orbit_dir` must still be existing folders, because the config check requires
+them. Empty folders are enough.
+
 ### 2b. Water mask in radar coordinates (`crop`, optional)
 
 A geocoded water mask, such as `watermask.tif` in WGS84 with 1 = land and 0 = water, can't be passed to dolphin or MintPy
