@@ -6,7 +6,7 @@ paths:
   orbit_dir: /home/lukas/projects/ADUCAT/data/input_data/ASC_073/orbits
   # Copernicus DEM GLO-30 (heights above the EGM2008 geoid). Note: DEM_30m.wgs84.dem in
   # the same folder has identical heights despite its name, i.e. it is NOT ellipsoidal.
-  dem_file: /home/lukas/projects/ADUCAT/data/DEM/DEM_30m.tif
+  dem_file: /home/lukas/projects/ADUCAT/data/dem/cop_dem.tif
   dem_vertical_datum: egm2008
   work_dir: runs/test_asc073
 

@@ -179,11 +179,15 @@ def crop_stack_to_aoi(config):
         config.dolphin.strides_x,
         config.dolphin.strides_y,
     )
+    # Sizes as rows x columns, the order dolphin and numpy print, so the numbers
+    # can be compared directly with dolphin's "Total stack size" log line.
     logger.info(
-        "AOI crop window in the ISCE2 grid (%d x %d): x=%d..%d, y=%d..%d",
-        window.full_width, window.full_length,
+        "AOI crop window: %d rows x %d columns (x=%d..%d, y=%d..%d in the full "
+        "ISCE2 grid of %d rows x %d columns)",
+        window.length, window.width,
         window.x_offset, window.x_offset + window.width - 1,
         window.y_offset, window.y_offset + window.length - 1,
+        window.full_length, window.full_width,
     )
 
     for date, slc_file in slc_files.items():
