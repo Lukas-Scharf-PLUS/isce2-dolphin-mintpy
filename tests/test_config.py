@@ -189,24 +189,3 @@ def test_non_numeric_min_temporal_coherence_is_rejected(minimal_config):
         {"mintpy": {"mintpy.networkInversion.minTempCoh": "high"}}))
     with pytest.raises(ConfigError, match="minTempCoh"):
         load_config(minimal_config)
-
-
-def test_subpixel_is_off_by_default(minimal_config):
-    assert load_config(minimal_config).subpixel.enabled is False
-
-
-def test_subpixel_can_be_enabled(minimal_config):
-    rewrite(minimal_config, lambda c: c.update({"subpixel": {"enabled": True}}))
-    assert load_config(minimal_config).subpixel.enabled is True
-
-
-def test_subpixel_enabled_must_be_boolean(minimal_config):
-    rewrite(minimal_config, lambda c: c.update({"subpixel": {"enabled": "yes please"}}))
-    with pytest.raises(ConfigError, match="subpixel.enabled"):
-        load_config(minimal_config)
-
-
-def test_unknown_subpixel_option_is_rejected(minimal_config):
-    rewrite(minimal_config, lambda c: c.update({"subpixel": {"enable": True}}))
-    with pytest.raises(ConfigError, match="subpixel"):
-        load_config(minimal_config)

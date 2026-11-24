@@ -167,16 +167,6 @@ class MintpyConfig:
 
 
 @dataclass
-class SubpixelConfig:
-    """Optional sub-pixel positioning of PS (see ``subpixel.py``).
-
-    Off by default: the pipeline then runs exactly as without this section.
-    """
-
-    enabled: bool = False
-
-
-@dataclass
 class PipelineConfig:
     """Complete pipeline configuration.
 
@@ -192,7 +182,6 @@ class PipelineConfig:
     dolphin: DolphinConfig
     mintpy: MintpyConfig
     inversion: str = INVERSION_BY_MINTPY
-    subpixel: SubpixelConfig = field(default_factory=SubpixelConfig)
 
     @property
     def dolphin_inverts(self):
@@ -345,9 +334,6 @@ def _validate(config):
     if not 0.0 < config.water_mask.max_water_fraction <= 1.0:
         raise ConfigError("water_mask.max_water_fraction must be in (0, 1].")
 
-    if not isinstance(config.subpixel.enabled, bool):
-        raise ConfigError(f"subpixel.enabled must be true or false, got {config.subpixel.enabled!r}.")
-
     if config.inversion not in VALID_INVERSION_MODES:
         raise ConfigError(
             f"inversion must be one of {VALID_INVERSION_MODES}, got '{config.inversion}'."
@@ -390,7 +376,7 @@ def load_config(config_file):
         raw = yaml.load(stream, Loader=PipelineYamlLoader) or {}
 
     unknown_sections = set(raw) - {"paths", "aoi", "water_mask", "isce", "inversion",
-                                   "dolphin", "mintpy", "subpixel"}
+                                   "dolphin", "mintpy"}
     if unknown_sections:
         raise ConfigError(f"Unknown config section(s): {sorted(unknown_sections)}")
     if "paths" not in raw:
@@ -404,7 +390,6 @@ def load_config(config_file):
         dolphin=_build_dolphin_section(raw.get("dolphin")),
         mintpy=_build_mintpy_section(raw.get("mintpy")),
         inversion=str(raw.get("inversion", INVERSION_BY_MINTPY)).lower(),
-        subpixel=_build_section(SubpixelConfig, raw.get("subpixel"), "subpixel"),
     )
     _convert_paths(config.paths)
     if config.aoi.file is not None:

@@ -52,8 +52,7 @@ python -m isce_dolphin_mintpy run config/test_asc073.yaml
 python -m isce_dolphin_mintpy run config/test_asc073.yaml --steps crop dolphin mintpy
 ```
 
-Steps: `isce`, `crop`, `dolphin`, `mintpy`, and the optional `subpixel` (runs only with `subpixel.enabled: true`,
-otherwise it logs that it is skipped, so existing configs behave as before). The ISCE2 step can be restarted after an interruption.
+Steps: `isce`, `crop`, `dolphin`, `mintpy`. The ISCE2 step can be restarted after an interruption.
 Finished topsStack run files are marked in `isce/run_status/` and skipped.
 Relative paths in the config are resolved against the current directory.
 
@@ -71,7 +70,6 @@ pipeline option.
 | `inversion` | a single top-level option, not a section: `mintpy` (MintPy network inversion, default) or `dolphin` (dolphin's time series, MintPy only corrects). It affects both the dolphin and the MintPy step | `mintpy` / `dolphin` |
 | `dolphin` | any dolphin option: phase linking, network, unwrapper (snaphu, whirlwind, ...), time series, workers | dolphin's own nested structure, all listed in [config/dolphin_options_reference.yaml](config/dolphin_options_reference.yaml) |
 | `mintpy` | `dolphin_temporal_coherence_threshold` and any `smallbaselineApp.cfg` option | `mintpy.*` keys with MintPy's original names (`smallbaselineApp.py -H`) |
-| `subpixel` | optional sub-pixel positioning of PS: `enabled` (default `false`) | pipeline names |
 
 Checked before ISCE2 starts:
 
@@ -169,7 +167,6 @@ isce_dolphin_mintpy/
   mintpy_inputs.py         dolphin outputs + ISCE2 metadata -> MintPy HDF5 inputs
   mintpy_template.py       mintpy.* options of the config -> checked MintPy template file
   mintpy_step.py           step "mintpy": smallbaselineApp.py runs, step by step with plots
-  subpixel.py              step "subpixel" (optional): sub-pixel position of PS from the SLC amplitudes
 tests/                     unit tests (one test_<module>.py per module)
 runs/                      processing output of local runs (git-ignored)
 ```
@@ -182,7 +179,6 @@ crop/      VRT windows of the SLCs and geometry for the AOI + crop_window.json
 dolphin/   dolphin work dir (dolphin_config.yaml, interferograms/, unwrapped/, timeseries/)
 mintpy/    MintPy work dir (inputs/, timeseries*.h5, velocity.h5, geo/, pic/ = figures of all steps)
 logs/      pipeline.log and one log per external command
-subpixel/  only with subpixel.enabled: offsets, their spread, on_peak flag, lat/lon/height per PS
 ```
 
 ## How it works
@@ -421,59 +417,6 @@ unwrapping error correction, `avgPhaseVelocity`, the masks, the time series, vel
 later step fails, the figures of the earlier steps are already saved. Because the figures are drawn again after
 every step, this adds some run time on large stacks. Switch it off with `mintpy.plot: "no"` and plot once at the
 end with `smallbaselineApp.py isce_dolphin_mintpy.cfg --dir . --plot` inside `mintpy/`.
-
-### 5. Sub-pixel PS positions (`subpixel`, optional)
-
-Off by default. Enable it with:
-
-```yaml
-subpixel:
-  enabled: true
-```
-
-It needs the `crop` and `dolphin` steps and is independent of MintPy. Run it alone on a finished run with
-`--steps subpixel`.
-
-**Why.** Every output pixel is placed at its pixel center, but a point scatterer can be anywhere in the
-resolution cell (about 2.3 m slant range x 14 m azimuth). A point scatterer is imaged as a band-limited peak
-that spreads over the neighbouring pixels. Where its maximum lies between the pixels follows from the shape
-over those pixels: the neighbour on the side of the scatterer is brighter. The gain is largest in azimuth:
-from about ±4 m (standard error of the pixel center) to about ±1 m for strong, isolated PS. Phases and
-displacements are not changed.
-
-**How.**
-
-1. For every output pixel, take the same full-resolution PS pixel dolphin uses: dolphin's PS mask and,
-   with strides > 1, the brightest PS in the output window (dolphin's `use_max_ps`).
-2. Find the amplitude peak in the 3 x 3 neighbourhood in dolphin's mean amplitude. A pixel on the flank of
-   a strong scatterer can be a PS too.
-3. For every date, fit a parabola to the log amplitude of the peak and its two neighbours, separately in
-   range and azimuth (a Gaussian through three samples). Simulated with Sentinel-1-like impulse responses,
-   its bias is below about 0.07 pixel. Dates on which the peak pixel is not the local maximum are skipped.
-4. Report the mean over dates and the standard deviation. **The standard deviation is the quality measure:**
-   small means one dominant scatterer; large means interfering scatterers or noise, and the offset should
-   not be used.
-
-Only amplitudes are used, so the TOPS azimuth phase ramp (which complex interpolation would have to remove
-first) and burst seams do not matter.
-
-**Outputs** in `subpixel/`, one GeoTIFF per layer on dolphin's output grid, NaN where there is no PS:
-
-| File | Meaning |
-| --- | --- |
-| `range_offset.tif`, `azimuth_offset.tif` | offset of the scatterer in full-resolution samples/lines, relative to the pixel whose geometry the MintPy inputs use, `(i*sy + sy//2, j*sx + sx//2)`. Positive = farther from the sensor / later azimuth time (larger row) |
-| `range_offset_std.tif`, `azimuth_offset_std.tif` | standard deviation of the per-date estimates (needs 2 dates) |
-| `valid_dates.tif` | number of dates in the estimate |
-| `on_peak.tif` | 1 = the PS pixel is the peak; 0 = it lies on the flank of a peak in a neighbouring pixel. A strong scatterer's main lobe covers ~1.4 azimuth lines, so neighbouring pixels often point to the **same** scatterer. Keep `on_peak = 1` for one point per scatterer |
-| `latitude.tif`, `longitude.tif` (float64), `height.tif` | ISCE2 geometry interpolated at the sub-pixel position, on the DEM surface. The DEM error (height of the scatterer above the DEM) is not applied |
-
-**Limits.** Works for strong point scatterers only; distributed scatterers have no single peak. Two
-scatterers inside one resolution cell cannot be separated; their combined peak lies between them, or moves
-from date to date (then the standard deviation is large). The amplitude fit is slightly less precise than
-oversampling the complex SLC. With strides 4 x 1, range offsets include the distance from the output pixel
-center to the PS (up to about 2 pixels). In the 3-date test run, the brightest 1 % of the PS had a median
-azimuth standard deviation of 0.04 pixel; with 3 dates the amplitude dispersion (and so the PS mask) is not
-meaningful, so these numbers only show that the step works.
 
 ## Test result (3 dates, central Vienna)
 

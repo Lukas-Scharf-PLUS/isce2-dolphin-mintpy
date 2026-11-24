@@ -100,8 +100,3 @@ mintpy:
   mintpy.reference.date: "20220101"                  # must be an acquisition date of the stack (checked early)
   ## plot
   mintpy.plot: "yes"                                 # figures of every step in <work_dir>/mintpy/pic/
-
-subpixel:
-  # Optional: sub-pixel position of PS from the SLC amplitudes (README, "Sub-pixel PS positions").
-  # Writes <work_dir>/subpixel/*.tif; changes no other output. Default: false (step is skipped).
-  enabled: false
