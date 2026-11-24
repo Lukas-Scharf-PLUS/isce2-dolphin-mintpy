@@ -50,6 +50,35 @@ Offsets are relative to the full-resolution pixel whose geometry the MintPy
 inputs use for that output pixel, (i*sy + sy//2, j*sx + sx//2), so a consumer
 adds them to that pixel position. Positive range = farther from the sensor,
 positive azimuth = later in azimuth time (increasing row).
+
+Combining with MintPy's DEM error (consumers must do this, not this step)
+-------------------------------------------------------------------------
+MintPy's ``dem_error`` is estimated from phase that ISCE2 flattened at the
+*pixel center* on the DEM (point P0). The phase measures how far the scatterer
+lies from P0 at right angles to the line of sight, so ``dem_error`` refers to
+P0. The latitude/longitude/height layers above are a different reference point:
+the DEM surface at the sub-pixel position (P0'). Moving along the DEM surface by
+a slant-range offset dr also moves the point at right angles to the line of
+sight, by an amount equivalent to dr * cos(incidence) of height. That part is
+already contained in ``dem_error``. Adding the full ``dem_error`` to P0' would
+count it twice (Sentinel-1: up to ~0.9 m height, ~1.1 m horizontally).
+
+DePSI avoids this by recomputing the reference phase at the sub-pixel position
+(Yang et al. 2020, ISPRS J. Photogramm. Remote Sens. 165, 98-107). Without
+rerunning anything, the equivalent is to re-reference the DEM error first:
+
+    dr_m                 = range_offset * slant-range pixel spacing [m]
+    dem_error_subpixel   = dem_error - dr_m * cos(incidence_angle)
+
+and then apply the usual DEM-error shift to P0' with ``dem_error_subpixel``
+instead of ``dem_error``:
+
+    scatterer height     = height + dem_error_subpixel
+    horizontal shift     = dem_error_subpixel / tan(incidence_angle),
+                           away from the satellite
+
+The azimuth offset needs no such correction: the flattening phase hardly
+changes along azimuth.
 """
 
 import logging

@@ -475,6 +475,26 @@ center to the PS (up to about 2 pixels). In the 3-date test run, the brightest 1
 azimuth standard deviation of 0.04 pixel; with 3 dates the amplitude dispersion (and so the PS mask) is not
 meaningful, so these numbers only show that the step works.
 
+**Combining with MintPy's DEM error.** Do not simply add MintPy's `dem_error` to the sub-pixel position.
+`dem_error` comes from phase that ISCE2 flattened at the *pixel center* on the DEM. The phase measures how far
+the scatterer lies from that point at right angles to the line of sight. The sub-pixel `latitude`/`longitude`/
+`height` are a different reference point: the DEM surface at the sub-pixel position. Moving along the DEM by a
+slant-range offset `dr` also moves the point at right angles to the line of sight, by the equivalent of
+`dr * cos(incidence)` of height. That part is already in `dem_error`, so adding both counts it twice (Sentinel-1:
+up to about 0.9 m in height and 1.1 m horizontally). DePSI avoids this by recomputing the reference phase at the
+sub-pixel position (Yang et al. 2020, ISPRS J. Photogramm. Remote Sens. 165, 98–107). The equivalent without
+rerunning anything is to re-reference the DEM error first:
+
+```
+dr_m               = range_offset * slant-range pixel spacing      # metres, positive = farther from the sensor
+dem_error_subpixel = dem_error - dr_m * cos(incidence_angle)
+
+scatterer height   = height (sub-pixel layer) + dem_error_subpixel
+horizontal shift   = dem_error_subpixel / tan(incidence_angle), away from the satellite
+```
+
+The azimuth offset needs no such correction, because the flattening phase hardly changes along azimuth.
+
 ## Test result (3 dates, central Vienna)
 
 The test config `config/test_asc073.yaml` runs end to end. ISCE2 processes 3 bursts of IW1, and the AOI crop is
