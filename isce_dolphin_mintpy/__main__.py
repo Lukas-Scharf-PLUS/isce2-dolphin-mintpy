@@ -6,6 +6,8 @@ Stages run in this order and can be selected with ``--steps``:
              if configured, convert the water mask to dolphin's output grid
     dolphin  phase linking, interferograms, unwrapping
     mintpy   convert to MintPy and run inversion/corrections
+    subpixel optional: sub-pixel positions of PS (only with ``subpixel.enabled: true``;
+             otherwise the step only logs that it is skipped)
 """
 
 import argparse
@@ -18,6 +20,7 @@ from .dolphin_step import run_dolphin
 from .isce_stack import run_isce_stack
 from .mintpy_step import check_reference_date_in_slc_dir, run_mintpy
 from .radar_crop import crop_stack_to_aoi
+from .subpixel import run_subpixel
 from .versions import write_versions
 from .water_mask import create_water_mask
 
@@ -32,6 +35,7 @@ STEPS = {
     "crop": run_crop,
     "dolphin": run_dolphin,
     "mintpy": run_mintpy,
+    "subpixel": run_subpixel,
 }
 
 
