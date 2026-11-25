@@ -267,6 +267,10 @@ and a masked pixel can't be recovered later. Pixels that turn out bad are still 
 | `crop/water/water_fraction.tif` | water fraction 0..1 on dolphin's output grid | MintPy (`waterFraction`) |
 | `crop/water/valid_mask.tif` | 1 = keep, 0 = water | dolphin `mask_file` (applied in unwrapping) |
 
+`latitude` and `longitude` in MintPy's `geometryRadar.h5` are stored as float64: float32 resolves only about
+0.4 m at 48° latitude, too coarse for point positions and sub-pixel shifts. MintPy reads them as they are
+(tested: `reference_point` finds the pixel of `mintpy.reference.lalo` with `geo2radar`).
+
 In MintPy's `geometryRadar.h5` the pipeline adds `waterMask` (True = land) and `waterFraction`. The fraction is kept,
 so a different threshold can be tried later in MintPy without rerunning dolphin, e.g. with
 `generate_mask.py inputs/geometryRadar.h5 waterFraction -M 0.5`.

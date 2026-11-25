@@ -163,8 +163,10 @@ def read_strided_geometry(crop_dir, strides_x, strides_y, out_length, out_width)
         return sample_to_output_grid(array, strides_x, strides_y, out_length, out_width)
 
     geometry = {
-        "latitude": sample("lat").astype(np.float32),
-        "longitude": sample("lon").astype(np.float32),
+        # float64: float32 resolves only ~4e-6 degrees (~0.4 m) at 48 degrees, too
+        # coarse for point positions and the sub-pixel shifts computed from them.
+        "latitude": sample("lat").astype(np.float64),
+        "longitude": sample("lon").astype(np.float64),
         "height": sample("hgt").astype(np.float32),
         # ISCE2 los.rdr: band 1 = incidence angle, band 2 = azimuth angle of the
         # ground-to-satellite LOS, from north, anti-clockwise; same as MintPy.
